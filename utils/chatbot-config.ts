@@ -109,7 +109,7 @@ function responseWithPhoneCheck(messages: string[], hasPhone: boolean): string[]
 export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
   // 1. Consultas de precio / plan / demo
   {
-    triggers: ["precio", "plan", "demo", "contratar", "suscripción", "costo"],
+    triggers: ["precio", "plan", "demo", "contratar", "suscripción", "costo", "información"],
     response: (hasPhone: boolean) => randomMessage(responseWithPhoneCheck([
       "💼 ¡Hola! Para consultas sobre planes o demos, podemos enviarte todos los detalles. Déjanos tu teléfono y te contactaremos con información y promociones exclusivas, incluyendo un caso de éxito reciente que muestra cómo optimizamos procesos para empresas como la tuya.",
       "💼 ¡Hola! Queremos ayudarte a elegir el plan adecuado. Proporciona tu teléfono y te enviaremos toda la información junto con nuestra oferta especial de esta semana.",
