@@ -53,6 +53,7 @@ interface ContactData {
 interface Message {
   content: string;
   message_type: "incoming" | "outgoing" | "note";
+  tags: string[];
 }
 
 // ==================== HELPERS ====================
@@ -113,6 +114,7 @@ export async function POST(req: NextRequest) {
 }
 
 // ==================== HANDLERS ====================
+// ==================== HANDLERS ====================
 async function handleConversationCreated(payload: WebhookPayload) {
   const sender = payload.meta?.sender;
   const contactId = sender?.id ?? await createOrUpdateContact(sender?.name || "Cliente desconocido", sender?.email || undefined);
@@ -121,12 +123,20 @@ async function handleConversationCreated(payload: WebhookPayload) {
   const conversationId = payload.id ?? await createConversation(contactId, INBOX_MAP.principal);
   if (!conversationId) return;
 
-  // Agregar etiquetas de bienvenida
+  // ✅ Agregar etiquetas de bienvenida
   await safeAddTags(conversationId, ["auto_bienvenida", "kb_bienvenida"]);
 
-  // Enviar mensaje de bienvenida aleatorio
-  await sendBotReply(conversationId, getRandom(GREETINGS));
-  log("info", "`📩 Mensaje de bienvenida enviado en conversación ${conversationId}`");
+  // ✅ Enviar mensaje de bienvenida solo si no se ha enviado antes
+  const messages = await getConversationMessages(conversationId);
+  const alreadyWelcomed = messages.some(m =>
+    m.message_type === "outgoing" &&
+    ["auto_bienvenida", "kb_bienvenida"].some(tag => m.tags?.includes(tag))
+  );
+
+  if (!alreadyWelcomed) {
+    await sendBotReply(conversationId, getRandom(GREETINGS));
+    log("info", `📩 Mensaje de bienvenida enviado en conversación ${conversationId}`);
+  }
 
   // Manejar lead tags (teléfono, etc.)
   const newTags: string[] = [];
@@ -141,7 +151,7 @@ async function handleConversationCreated(payload: WebhookPayload) {
   if (flowRule?.assignTeamId) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
   if (flowRule?.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
 
-  log("info", "`✅ Conversación ${conversationId} creada; mensaje de bienvenida enviado`)");
+  log("info", `✅ Conversación ${conversationId} creada; mensaje de bienvenida enviado si era necesario`);
 }
 
 // ==================== GPT INTEGRATION ====================
