@@ -8,6 +8,7 @@ const geistSans = localFont({
   variable: "--font-geist-sans",
   weight: "100 900",
 });
+
 const geistMono = localFont({
   src: "./fonts/GeistMonoVF.woff",
   variable: "--font-geist-mono",
@@ -15,17 +16,20 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: " ERPExpert - Software de gestión empresarial",
+  title: "ERPExpert - Software de gestión empresarial",
   description: "Software de gestión empresarial para empresas de todos los tamaños",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en">
-      <head>
-        <link rel="stylesheet" href="/_next/static/css/tailwind.css" />
-      </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
         {children}
       </body>
       <ChatwootWidget websiteToken={process.env.NEXT_PUBLIC_CHATWOOT_WEBSITE_TOKEN} />
