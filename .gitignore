@@ -1,36 +1,53 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# ----------------------
+# Dependencies
+# ----------------------
 /node_modules
 /.pnp
 .pnp.js
 .yarn/install-state.gz
+.env*.local      # Variables de entorno locales (API keys, secrets)
 
-# testing
-/coverage
+# ----------------------
+# Testing
+# ----------------------
+/coverage         # Cobertura de tests
 
-# next.js
-/.next/
-/out/
+# ----------------------
+# Next.js
+# ----------------------
+/.next/           # Build de Next.js
+/out/             # Export de Next.js (si se usa)
 
-# production
-/build
+# ----------------------
+# Production
+# ----------------------
+/build            # Carpeta de build si se usa
 
-# misc
+# ----------------------
+# Misc
+# ----------------------
 .DS_Store
-*.pem
+*.pem             # Certificados
 
-# debug
+# ----------------------
+# Debug / Logs
+# ----------------------
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
-.env*.local
+# ----------------------
+# Local environment files
+# ----------------------
+.env*.local       # Archivos locales de entorno
+.next-env.d.ts    # Generado por Next.js
 
-# vercel
-.vercel
+# ----------------------
+# Vercel
+# ----------------------
+.vercel           # Configuración local de Vercel
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# ----------------------
+# TypeScript
+# ----------------------
+*.tsbuildinfo     # Archivos de build incremental de TypeScript
