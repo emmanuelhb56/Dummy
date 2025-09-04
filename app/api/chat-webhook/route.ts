@@ -647,8 +647,8 @@ async function handlePhoneDetection(
   const tags: string[] = [];
   const lastMessage = existingMessages[existingMessages.length - 1];
 
-  // Regex para México: +52 opcional o 10 dígitos
-  const phoneRegex = /(?:\+52)?\d{10}/;
+  // Regex mejorada: acepta +52 opcional, espacios, guiones, paréntesis
+  const phoneRegex = /(?:\+52)?[\s\-().]*\d{2,4}[\s\-().]*\d{3,4}[\s\-().]*\d{4}/;
   const phoneMatch =
     text.match(phoneRegex)?.[0] || lastMessage?.content?.match(phoneRegex)?.[0];
 
@@ -662,7 +662,6 @@ async function handlePhoneDetection(
           { headers: { api_access_token: PERSONAL_TOKEN } }
         );
 
-        // Solo actualizar si no tiene teléfono
         if (!contact.phone_number) {
           await updateContactFromConversation(conversationId, { phone_number: cleanPhone });
         }
@@ -681,12 +680,16 @@ async function handlePhoneDetection(
 
 // ==================== NORMALIZE PHONE ====================
 function normalizeMexPhone(phone: string): string | null {
+  // Solo dejar números
   let digits = phone.replace(/\D/g, "");
 
-  if (digits.startsWith("52") && digits.length === 12) return `+${digits}`;
+  // Quitar el 52 inicial si ya lo tiene y es correcto
+  if (digits.length === 12 && digits.startsWith("52")) return `+${digits}`;
   if (digits.length === 10) return `+52${digits}`;
+
   return null;
 }
+
 
 // ==================== UPDATE CONTACT ====================
 async function updateContactFromConversation(
