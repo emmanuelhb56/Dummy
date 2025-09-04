@@ -647,7 +647,7 @@ async function handlePhoneDetection(
   const tags: string[] = [];
   const lastMessage = existingMessages[existingMessages.length - 1];
 
-  // Regex más estricto: +52 opcional o 10 dígitos directos
+  // Regex para México: +52 opcional o 10 dígitos
   const phoneRegex = /(?:\+52)?\d{10}/;
   const phoneMatch =
     text.match(phoneRegex)?.[0] || lastMessage?.content?.match(phoneRegex)?.[0];
@@ -655,9 +655,20 @@ async function handlePhoneDetection(
   if (phoneMatch) {
     const cleanPhone = normalizeMexPhone(phoneMatch);
     if (cleanPhone) {
-      tags.push("telefono_recibido");
-      await updateContactFromConversation(conversationId, { phone_number: cleanPhone });
+      const contactId = await getContactIdFromConversation(conversationId);
+      if (contactId) {
+        const contact = await fetchJson<ContactData>(
+          `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
+          { headers: { api_access_token: PERSONAL_TOKEN } }
+        );
 
+        // Solo actualizar si no tiene teléfono
+        if (!contact.phone_number) {
+          await updateContactFromConversation(conversationId, { phone_number: cleanPhone });
+        }
+      }
+
+      tags.push("telefono_recibido");
       return {
         reply: `📱 Hemos registrado tu teléfono: ${cleanPhone}`,
         tags,
@@ -670,20 +681,10 @@ async function handlePhoneDetection(
 
 // ==================== NORMALIZE PHONE ====================
 function normalizeMexPhone(phone: string): string | null {
-  // quita caracteres no numéricos
   let digits = phone.replace(/\D/g, "");
 
-  // Si empieza con 52 y después 10 dígitos, lo dejamos como está
-  if (digits.startsWith("52") && digits.length === 12) {
-    return `+${digits}`;
-  }
-
-  // Si tiene solo 10 dígitos (nacional), agregamos +52
-  if (digits.length === 10) {
-    return `+52${digits}`;
-  }
-
-  // Si no cumple, lo descartamos
+  if (digits.startsWith("52") && digits.length === 12) return `+${digits}`;
+  if (digits.length === 10) return `+52${digits}`;
   return null;
 }
 
