@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
 // ==================== HANDLERS ====================
 async function handleConversationCreated(payload: WebhookPayload) {
   const sender = payload.meta?.sender;
-  const contactId = sender?.id ?? await createOrUpdateContact(sender?.name || "Cliente", sender?.email);
+  const contactId = sender?.id ?? await createOrUpdateContact(sender?.name || "Cliente desconocido", sender?.email || undefined);
   if (!contactId) return;
 
   const conversationId = payload.id ?? await createConversation(contactId, INBOX_MAP.principal);

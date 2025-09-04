@@ -123,7 +123,7 @@ export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
 
   // 2. Promociones y ofertas
   {
-    triggers: ["descuento", "promoción", "oferta", "rebaja", "cupón", "promociones"],
+    triggers: ["descuento", "promoción", "oferta", "rebaja", "cupón", "promociones", "promos"],
     response: (hasPhone: boolean) => randomMessage(responseWithPhoneCheck([
       "🎁 ¡Tenemos ofertas especiales este mes! Déjanos tu teléfono y te enviaremos los detalles directamente. Por ejemplo, nuestra promo semanal da un 15% adicional en planes seleccionados.",
       "🎁 ¡Excelente! Aprovecha nuestras promociones: esta semana, 2 meses gratis al contratar el plan anual. Proporciona tu teléfono para enviarte la oferta y detalles exclusivos.",
@@ -455,6 +455,42 @@ export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
     maxResponses: 2,
     exceededResponse: "Ya atendimos tu solicitud prioritaria. Si surge algo más, estamos disponibles para ayudarte de inmediato."
   },
+  // 26. Contestación de saludos 
+  {
+    triggers: ["hola", "buenas", "buenas tardes", "buenas noches", "buenas noches", "buenas noches", "buenas noches", "buenas noches"],
+    response: "¡Hola! Estamos para ayudarte, ¿en qué podemos ayudarte?",
+    inbox: "principal",
+    tags: [],
+    controlTag: "kb_bienvenida",
+    maxResponses: 2,
+    exceededResponse: "Ya te respondimos. Si necesitas algo más, no dudes en hacernos saber."
+  },
+  // 27. Contestación de sí
+  {
+    triggers: ["si", "s\\b[ií]"],
+    response: (hasPhone: boolean) => {
+      if (hasPhone) {
+        return "¡Genial! Lo estaremos contactando lo antes posible.";
+      } else {
+        return "Genial, déjanos tu teléfono y te ayudaremos lo antes posible.";
+      }
+    },
+    inbox: "principal",
+    tags: [],
+    controlTag: "kb_si",
+    maxResponses: 2,
+    exceededResponse: "Ya te respondimos. Si necesitas algo más, no dudes en hacernos saber."
+  },
+ //  28. Contestación de no
+  {
+    triggers: ["no", "n\\b[oó]"],
+    response: "¡Genial! No dudes en hacernos saber si necesitas algo más.",
+    inbox: "principal",
+    tags: [],
+    controlTag: "kb_no",
+    maxResponses: 2,
+    exceededResponse: "Ya te respondimos. Si necesitas algo más, no dudes en hacernos saber."
+  },
 ];
 
 // ----------------------------
@@ -528,7 +564,9 @@ export const TAGS = [
   { title: "kb_eventos_webinar", color: TAG_COLORS.orange, showInSidebar: false },
   { title: "kb_recomendaciones", color: TAG_COLORS.orange, showInSidebar: false },
   { title: "kb_urgente", color: TAG_COLORS.red, showInSidebar: false },
-
+  { title : "kb_si", color: TAG_COLORS.green, showInSidebar: false },
+  { title : "kb_no", color: TAG_COLORS.red, showInSidebar: false },
+  
   // ----------------------------
   // Soporte
   // ----------------------------
