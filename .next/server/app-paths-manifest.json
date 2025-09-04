@@ -1,3 +1,13 @@
 {
-  "/page": "app/page.js"
+  "/_not-found/page": "app/_not-found/page.js",
+  "/casos-exito/page": "app/casos-exito/page.js",
+  "/api/chat-webhook/route": "app/api/chat-webhook/route.js",
+  "/contacto/page": "app/contacto/page.js",
+  "/login/page": "app/login/page.js",
+  "/page": "app/page.js",
+  "/favicon.ico/route": "app/favicon.ico/route.js",
+  "/servicios/page": "app/servicios/page.js",
+  "/modulos/page": "app/modulos/page.js",
+  "/precios/page": "app/precios/page.js",
+  "/soporte/page": "app/soporte/page.js"
 }
