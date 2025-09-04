@@ -1,27 +1,73 @@
+/* ========================= */
+/* IMPORTS EXTERNOS           */
+/* ========================= */
+@import "tw-animate-css";
+
+/* ========================= */
+/* DIRECTIVAS TAILWIND        */
+/* ========================= */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+
+/* ========================= */
+/* VARIABLES DE FUENTE        */
+/* ========================= */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --font-inter: "Inter", sans-serif;
+  --font-jetbrains-mono: "JetBrains Mono", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ========================= */
+/* MODO OSCURO               */
+/* ========================= */
+.dark {
+  --background: hsl(210 8% 6%);
+  --foreground: hsl(0 0% 95%);
+  --card: hsl(210 8% 6%);
+  --card-foreground: hsl(0 0% 95%);
+  --popover: hsl(210 8% 6%);
+  --popover-foreground: hsl(0 0% 95%);
+  --primary: hsl(0 0% 95%);
+  --primary-foreground: hsl(210 8% 6%);
+  --secondary: hsl(210 8% 33%);
+  --secondary-foreground: hsl(0 0% 95%);
+  --muted: hsl(210 8% 33%);
+  --muted-foreground: hsl(210 8% 70%);
+  --accent: hsl(270 80% 60%);
+  --accent-foreground: hsl(0 0% 100%);
+  --destructive: hsl(4 50% 50%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(210 8% 33%);
+  --input: hsl(210 8% 33%);
+  --ring: rgba(139, 92, 246, 0.5);
+}
+
+/* ========================= */
+/* BASE STYLES TAILWIND       */
+/* ========================= */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
+/* ========================= */
+/* UTILITIES PERSONALIZADAS   */
+/* ========================= */
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  .hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
   }
 }

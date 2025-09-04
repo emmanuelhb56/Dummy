@@ -1,0 +1,674 @@
+import { NextRequest, NextResponse } from "next/server";
+import fetch from "node-fetch";
+import { FLOW_RULES, KNOWLEDGE_BASE, BOT_TOKEN, BAD_WORDS, INBOX_MAP, PERMANENT_TAGS, GREETINGS, FAREWELLS, REOPENINGS, BAD_WORDS_RESPONSES, TEMP_SEMI_PERMANENT_TAGS } from "@/utils/chatbot-config";
+import OpenAI from "openai";
+
+const CHATWOOT_URL = process.env.CHATWOOT_URL || "https://app.chatwoot.com";
+const ACCOUNT_ID = process.env.CHATWOOT_ACCOUNT_ID || "132018";
+const PERSONAL_TOKEN = process.env.CHATWOOT_PERSONAL_TOKEN || "F2zAjGZ82fXq9Z1SVVWHDFGa";
+
+let lastProcessedMessage: { conversationId: number; content: string; timestamp: number } | null = null;
+const MESSAGE_COOLDOWN = 2000;
+// Fuera de la función, en la parte superior del archivo
+const conversationKbCache: Record<number, Record<string, number>> = {};
+
+
+const BASE_TIMEOUT = 30000; // 30s base
+const TIME_INCREMENT = 600000; // +10min por cada mensaje del usuario
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// ==================== TIPOS ====================
+interface WebhookPayload {
+  event: string;
+  message_type?: string;
+  content?: string;
+  id?: number;
+  conversation?: { id: number };
+  meta?: { sender?: { id?: number; name?: string; email?: string } };
+}
+
+interface ConversationData {
+  id: number;
+  inbox_id: number;
+  meta?: { 
+    sender?: { id?: number };
+    kb_counter?: Record<string, number>; // <--- aquí
+  };
+  priority?: "low" | "medium" | "high";
+  status?: "open" | "resolved" | "pending" | "spam" | "ignored" | "blocked";
+  team?: { id: number };
+  team_id?: number;
+  assignee?: { id: number };
+}
+
+interface ContactData {
+  id?: number;
+  name?: string;
+  email?: string;
+  phone_number?: string;
+  payload?: Record<string, unknown>;
+}
+
+interface Message {
+  content: string;
+  message_type: "incoming" | "outgoing" | "note";
+}
+
+// ==================== HELPER FETCH ====================
+async function fetchJson<T>(url: string, options?: RequestInit, retries = 3, backoff = 500): Promise<T> {
+  try {
+    const res = await fetch(url, options as import("node-fetch").RequestInit);
+    if (!res.ok) {
+      const text = await res.text();
+      if (retries > 0 && [429, 500, 502, 503, 504].includes(res.status)) {
+        console.warn(`⚠️ Error ${res.status} en ${url}, reintentando en ${backoff}ms...`);
+        await new Promise(r => setTimeout(r, backoff));
+        return fetchJson<T>(url, options, retries - 1, backoff * 2);
+      }
+      console.error(`❌ HTTP error ${res.status} en ${url}: ${text}`);
+      throw new Error(`HTTP error ${res.status} en ${url}`);
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if (retries > 0) {
+      console.warn(`⚠️ Fetch falló, reintentando en ${backoff}ms...`, err);
+      await new Promise(r => setTimeout(r, backoff));
+      return fetchJson<T>(url, options, retries - 1, backoff * 2);
+    }
+    console.error(`❌ Fetch definitivo falló en ${url}:`, err);
+    throw err;
+  }
+}
+
+// ==================== HELPER RANDOM ====================
+function getRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ==================== POST WEBHOOK ====================
+export async function POST(req: NextRequest) {
+  try {
+    const body: WebhookPayload = await req.json();
+    const event = body.event;
+
+    switch (event) {
+      case "conversation_created":
+        await handleConversationCreated(body);
+        break;
+      case "message_created":
+        if (body.message_type === "incoming") await handleMessageCreated(body);
+        break;
+      case "conversation_updated":
+        await handleConversationUpdated(body);
+        break;
+      default:
+        console.log(`Evento '${event}' no manejado`);
+    }
+
+    return NextResponse.json({ status: "ok" });
+  } catch (err) {
+    console.error("❌ Error webhook:", err);
+    return NextResponse.json({ error: "server error" }, { status: 500 });
+  }
+}
+
+// ==================== HANDLERS ====================
+async function handleConversationCreated(payload: WebhookPayload) {
+  const sender = payload.meta?.sender;
+  const contactId = sender?.id ?? await createOrUpdateContact(sender?.name || "Cliente", sender?.email);
+  if (!contactId) return;
+
+  const conversationId = payload.id ?? await createConversation(contactId, INBOX_MAP.principal);
+  if (!conversationId) return;
+
+  const labels = await getConversationLabels(conversationId);
+  if (!labels.includes("auto_bienvenida")) {
+    await safeAddTags(conversationId, ["auto_bienvenida"]);
+    await sendBotReply(conversationId, getRandom(GREETINGS));
+  }
+
+  const newTags: string[] = [];
+  await handleLeadTags(conversationId, contactId);
+  if (newTags.length) await addTagsSafely(conversationId, newTags);
+
+  const inboxKey = getInboxKeyById(INBOX_MAP.principal) as keyof typeof FLOW_RULES | undefined;
+  const flowRule = inboxKey ? FLOW_RULES[inboxKey] : undefined;
+
+  if (flowRule?.assignTeamId) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
+  if (flowRule?.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
+
+  const existingMessages = await getConversationMessages(conversationId);
+  const userMessageCount = existingMessages.filter(m => m.message_type === "incoming").length;
+  scheduleAutoClose(conversationId, userMessageCount);
+
+}
+
+// ==================== GPT INTEGRATION ====================
+async function generateGPTReply(
+  text: string,
+  contactHasPhone: boolean,
+  conversationId?: number // opcional, solo si queremos etiquetar
+): Promise<string | null> {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "Eres un asistente de atención al cliente." },
+        { role: "user", content: text },
+        { role: "system", content: contactHasPhone ? "El usuario tiene un número de teléfono." : "El usuario no tiene un número de teléfono." }
+      ],
+      temperature: 0.7,
+      max_tokens: 200
+    });
+
+    const content = completion.choices[0]?.message?.content?.trim();
+    if (!content) throw new Error("GPT respondió vacío");
+
+    return content;
+
+  } catch (err) {
+    console.error("❌ Error GPT:", err);
+
+    if (conversationId) {
+      // 1️⃣ Agregar etiqueta para seguimiento humano
+      await addTagsSafely(conversationId, ["error_gpt"]);
+
+      // 2️⃣ Enviar mensaje alternativo al usuario
+      await sendBotReply(
+        conversationId,
+        "⚠️ Nuestro asistente AI no puede responder en este momento. Un agente humano te atenderá pronto."
+      );
+    }
+
+    // 3️⃣ Retornar null para evitar fallback genérico duplicado
+    return null;
+  }
+}
+
+const autoCloseSent: Record<number, boolean> = {};
+const autoCloseTimers: Record<number, NodeJS.Timeout> = {};
+
+// ==================== AUTO-CLOSE ====================
+function scheduleAutoClose(conversationId: number, userMessageCount = 0) {
+  if (autoCloseSent[conversationId]) return;
+  if (autoCloseTimers[conversationId]) return;
+
+  const timeout = BASE_TIMEOUT + TIME_INCREMENT * userMessageCount;
+  console.log(`⏳ scheduleAutoClose llamado para conversación ${conversationId}, timeout = ${timeout}ms`);
+
+  autoCloseTimers[conversationId] = setTimeout(async () => {
+    try {
+      if (autoCloseSent[conversationId]) return;
+
+      const conversationData = await fetchJson<ConversationData>(
+        `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+        { headers: { api_access_token: PERSONAL_TOKEN } }
+      );
+
+      if (conversationData.status !== "open") return;
+
+      await safeAddTags(conversationId, ["no_respuesta"]);
+      await sendBotReply(conversationId, getRandom(FAREWELLS));
+      await closeConversation(conversationId);
+
+      autoCloseSent[conversationId] = true;
+      console.log(`✅ Conversación ${conversationId} cerrada automáticamente por inactividad`);
+    } catch (err) {
+      console.error("❌ Error en autoClose:", err);
+    } finally {
+      delete autoCloseTimers[conversationId];
+    }
+  }, timeout);
+}
+
+// ==================== CONVERSATIONS ====================
+async function closeConversation(conversationId: number) {
+  try {
+    await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+      body: JSON.stringify({ status: "resolved" })
+    });
+    console.log(`✅ Conversación ${conversationId} cerrada automáticamente`);
+  } catch (err) { console.error("❌ Error cerrando conversación:", err); }
+}
+
+async function reopenConversation(conversationId: number) {
+  try {
+    await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+      body: JSON.stringify({ status: "open" })
+    });
+    autoCloseSent[conversationId] = false; // ✅ reiniciar bandera
+    scheduleAutoClose(conversationId); // ⬅️ reprogramar auto-close
+    console.log(`🔔 Conversación ${conversationId} reabierta`);
+  } catch (err) { console.error("❌ Error reabriendo conversación:", err); }
+}
+
+// ==================== CONVERSATION UPDATED ====================
+async function handleConversationUpdated(payload: WebhookPayload) {
+  const conversationId = payload.conversation?.id;
+  if (!conversationId) return;
+
+  const conversationData = await fetchJson<ConversationData>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+
+  if (conversationData.status === "resolved") {
+    // No hacer nada si la conversación ya fue resuelta
+    console.log(`ℹ️ La conversación ${conversationId} ya fue resuelta`);
+    await sendBotReply(conversationId, getRandom(FAREWELLS));
+  }
+}
+
+// ==================== AUXILIARES ====================
+async function getConversationLabels(conversationId: number): Promise<string[]> {
+  try {
+    const data = await fetchJson<{ payload?: { title: string }[] }>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/labels`,
+      { headers: { api_access_token: PERSONAL_TOKEN } }
+    );
+    // Filtrar undefined o strings vacías
+    return (data.payload?.map(l => l.title).filter(Boolean)) || [];
+  } catch (err) {
+    console.error("❌ Error obteniendo etiquetas:", err);
+    return [];
+  }
+}
+
+// ==================== ADD TAGS SAFELY CORREGIDO ====================
+async function addTagsSafely(conversationId: number, tags: string[]) {
+  try {
+    // 1️⃣ Obtener etiquetas actuales
+    const existingLabels = await getConversationLabels(conversationId);
+
+    // 2️⃣ Separar etiquetas a eliminar (marcadas con "__remove__")
+    const toRemove = tags
+      .filter((t) => t.startsWith("__remove__"))
+      .map((t) => t.replace("__remove__", ""));
+
+    // 3️⃣ Filtrar etiquetas nuevas (sin "__remove__")
+    const toAdd = tags.filter((t) => !t.startsWith("__remove__"));
+
+    // 4️⃣ Definir sets de etiquetas que nunca se eliminan
+    const PERMANENT = new Set(PERMANENT_TAGS);
+    const SEMI = new Set(TEMP_SEMI_PERMANENT_TAGS);
+
+    // 5️⃣ Eliminar solo las etiquetas que no son permanentes ni semi-permanentes
+    for (const tag of toRemove) {
+      if (existingLabels.includes(tag) && !PERMANENT.has(tag) && !SEMI.has(tag)) {
+        await fetchJson(
+          `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/labels`,
+          {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+            body: JSON.stringify({ labels: [tag] }),
+          }
+        );
+        console.log(`🗑️ Etiqueta '${tag}' eliminada de conversación ${conversationId}`);
+      }
+    }
+
+    // 6️⃣ Combinar etiquetas finales respetando permanentes y semi-permanentes
+    const combined = Array.from(
+      new Set([
+        ...existingLabels.filter((l) => PERMANENT.has(l) || SEMI.has(l)), // siempre conservar permanentes y semi
+        ...existingLabels.filter((l) => !PERMANENT.has(l) && !SEMI.has(l) && !toRemove.includes(l)), // las que no se eliminan
+        ...toAdd.filter(Boolean), // agregar nuevas
+      ])
+    );
+
+    // 7️⃣ Guardar etiquetas finales
+    await fetchJson(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/labels`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+        body: JSON.stringify({ labels: combined }),
+      }
+    );
+
+    console.log(`✅ Etiquetas actualizadas para conversación ${conversationId}:`, combined);
+  } catch (err) {
+    console.error("❌ Error en addTagsSafely:", err);
+  }
+}
+
+// ==================== SAFE ADD TAGS SIMPLE ====================
+async function safeAddTags(conversationId: number, tags: string[]) {
+  try {
+    const PERMANENT = new Set(PERMANENT_TAGS);
+    const SEMI = new Set(TEMP_SEMI_PERMANENT_TAGS);
+
+    // No agregar duplicadas permanentes ni semi-permanentes
+    const filteredTags = tags.filter((t) => t && !PERMANENT.has(t) && !SEMI.has(t));
+
+    if (filteredTags.length === 0) return;
+
+    await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+      body: JSON.stringify({ labels: filteredTags }),
+    });
+
+    console.log(`📌 Etiquetas agregadas a conversación ${conversationId}:`, filteredTags);
+  } catch (err) {
+    console.error("❌ Error en safeAddTags:", err);
+  }
+}
+
+async function getConversationMessages(conversationId: number) {
+  const data = await fetchJson<{ payload: Message[] }>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+  return data.payload;
+}
+
+async function sendBotReply(conversationId: number, content: string) {
+  await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", api_access_token: BOT_TOKEN },
+    body: JSON.stringify({ content, message_type: "outgoing" })
+  });
+}
+
+async function getContactIdFromConversation(conversationId: number) {
+  const data = await fetchJson<ConversationData>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+  return data.meta?.sender?.id;
+}
+
+async function createOrUpdateContact(name: string, email?: string) {
+  try {
+    const contact = await fetchJson<ContactData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+        body: JSON.stringify({ name, email })
+      }
+    );
+    return contact.id;
+  } catch (err) {
+    console.error("❌ Error creando contacto:", err);
+    return undefined;
+  }
+}
+
+// ==================== CONVERSATION ====================
+async function createConversation(contactId: number, inboxId: number) {
+  try {
+    const conv = await fetchJson<ConversationData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+        body: JSON.stringify({ inbox_id: inboxId, contact_id: contactId })
+      }
+    );
+    return conv.id;
+  } catch (err) {
+    console.error("❌ Error creando conversación:", err);
+    return undefined;
+  }
+}
+// ==================== ID INBOX ====================
+function getInboxKeyById(inboxId: number) {
+  return Object.entries(INBOX_MAP).find(([, id]) => Number(id) === Number(inboxId))?.[0];
+}
+
+// ==================== EQUIPOS ====================
+async function assignTeamIfNeeded(conversationId: number, teamId: number) {
+  if (!teamId) {
+    console.warn(`⚠️ No se proporcionó teamId para la conversación ${conversationId}`);
+    return;
+  }
+
+  try {
+    const conversation = await fetchJson<ConversationData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+      { headers: { api_access_token: PERSONAL_TOKEN } }
+    );
+
+    if (!conversation.team?.id) {
+      await fetchJson(
+        `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/assignments`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+          body: JSON.stringify({ team_id: teamId }),
+        }
+      );
+      console.log(`✅ Conversación ${conversationId} asignada al equipo ${teamId}`);
+    } else {
+      console.log(`ℹ️ La conversación ${conversationId} ya tiene un equipo asignado`);
+    }
+  } catch (err) {
+    console.error("❌ Error asignando equipo:", err);
+  }
+}
+
+// ==================== PRIORITY ====================
+async function setPriorityIfNeeded(conversationId: number, priority: "low" | "medium" | "high") {
+  try {
+    await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+      body: JSON.stringify({ priority })
+    });
+  } catch (err) { console.error("❌ Error estableciendo prioridad:", err); }
+}
+// ==================== MESSAGE CREATED ====================
+async function handleMessageCreated(payload: WebhookPayload) {
+  const conversationId = payload.conversation?.id;
+  const text = payload.content?.trim();
+  if (!conversationId || !text) return;
+
+  const now = Date.now();
+  const normalize = (str: string) => str?.replace(/\s+/g, " ").trim() || "";
+
+  // Evitar mensajes duplicados en corto tiempo
+  if (
+    lastProcessedMessage &&
+    lastProcessedMessage.conversationId === conversationId &&
+    normalize(lastProcessedMessage.content) === normalize(text) &&
+    now - lastProcessedMessage.timestamp < MESSAGE_COOLDOWN
+  ) return;
+
+  lastProcessedMessage = { conversationId, content: text, timestamp: now };
+
+  const conversationData = await fetchJson<ConversationData>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+
+  // 🔹 Reabrir conversación si estaba resuelta
+  if (conversationData.status === "resolved") {
+    await reopenConversation(conversationId);
+    await sendBotReply(conversationId, getRandom(REOPENINGS));
+  }
+
+  const inboxKey = getInboxKeyById(conversationData.inbox_id) as keyof typeof FLOW_RULES | undefined;
+  const existingLabels = await getConversationLabels(conversationId);
+
+  // 🔹 Obtener datos de contacto
+  const contactId = await getContactIdFromConversation(conversationId);
+  let contactHasPhone = false;
+  if (contactId) {
+    const contactData = await fetchJson<ContactData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
+      { headers: { api_access_token: PERSONAL_TOKEN } }
+    );
+    contactHasPhone = !!contactData.phone_number;
+  }
+
+  // 🔹 Tags nuevos acumulados
+  const newTags: string[] = [];
+  if (contactId) await handleLeadTags(conversationId, contactId);
+
+  let reply: string | null = null;
+
+  // Cache global persistente por conversación
+  if (!conversationKbCache[conversationId]) {
+    conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
+    console.log(`🔹 Cargamos contador de KB para la conversación ${conversationId}`);
+  }
+
+  // ===========================
+  // KB CON MAX RESPONSES
+  // ===========================
+  const kbMatch = KNOWLEDGE_BASE.find(kb =>
+    kb.triggers.some(t => text.toLowerCase().includes(t.toLowerCase()))
+  );
+
+  if (kbMatch) {
+    const kbTag = (kbMatch.controlTag || kbMatch.triggers[0]).toLowerCase().trim();
+
+    // 🔹 Asegurarnos de tener el contador en cache
+    conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
+    const kbCounter = conversationKbCache[conversationId];
+
+    const count = kbCounter[kbTag] || 0;
+    console.log(`KB Tag: ${kbTag}, count: ${count}, max: ${kbMatch.maxResponses}`);
+
+    if (!kbMatch.maxResponses || count < kbMatch.maxResponses) {
+      reply = typeof kbMatch.response === "function"
+        ? kbMatch.response(contactHasPhone)
+        : kbMatch.response;
+
+      // 🔹 Actualizar contador en cache y persistir
+      kbCounter[kbTag] = count + 1;
+      conversationKbCache[conversationId] = kbCounter;
+      await saveKbCounter(conversationId, kbCounter);
+
+      // 🔹 Tags de KB
+      if (kbMatch.controlTag && !existingLabels.includes(kbMatch.controlTag)) newTags.push(kbMatch.controlTag);
+      if (kbMatch.tags?.length) newTags.push(...kbMatch.tags);
+    } else {
+      reply = kbMatch.exceededResponse || reply;
+    }
+
+    console.log("KB Counter actualizado:", kbCounter);
+  }
+
+  // ===========================
+  // Detección de teléfono
+  // ===========================
+  const phoneResult = await handlePhoneDetection(conversationId, text, await getConversationMessages(conversationId));
+  if (phoneResult.reply) reply = phoneResult.reply;
+  newTags.push(...phoneResult.tags);
+
+  // ===========================
+  // Palabras prohibidas
+  // ===========================
+  const detectedBadWord = BAD_WORDS.find(w => text.toLowerCase().includes(w.word));
+  if (detectedBadWord) {
+    const severityLevel: "leve" | "grave" = detectedBadWord.severity || "leve";
+    const filteredResponses = BAD_WORDS_RESPONSES.filter(r => r.severity === severityLevel);
+    reply = getRandom(filteredResponses).response;
+    newTags.push("cliente-grosero", "caso_especial");
+  }
+
+  // ===========================
+  // Respuesta GPT por defecto
+  // ===========================
+  if (!reply) {
+    reply = await generateGPTReply(text, contactHasPhone, conversationId);
+  }
+
+  // ===========================
+  // Combinar tags y aplicar
+  // ===========================
+  const flowRule = inboxKey ? FLOW_RULES[inboxKey] : undefined;
+  const flowTags = flowRule?.tags ?? [];
+  const combinedTags = Array.from(
+    new Set([...existingLabels.filter(l => PERMANENT_TAGS.includes(l)), ...newTags, ...flowTags])
+  );
+  await addTagsSafely(conversationId, combinedTags);
+
+  // ===========================
+  // Enviar respuesta
+  // ===========================
+  if (reply) await sendBotReply(conversationId, reply);
+
+  // ===========================
+  // Asignar equipo y prioridad
+  // ===========================
+  if (flowRule?.assignTeamId && !conversationData.team?.id) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
+  if (flowRule?.priority && !conversationData.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
+
+  // ===========================
+  // Programar auto-close
+  // ===========================
+  const existingMessages = await getConversationMessages(conversationId);
+  const userMessageCount = existingMessages.filter(m => m.message_type === "incoming").length;
+  scheduleAutoClose(conversationId, userMessageCount);
+}
+
+// ==================== HANDLE LEAD TAGS ====================
+async function handleLeadTags(
+  conversationId: number,
+  contactId: number
+): Promise<{ tags: string[] }> {
+  const tags: string[] = [];
+  try {
+    const contactData = await fetchJson<ContactData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
+      { headers: { api_access_token: PERSONAL_TOKEN } }
+    );
+
+    const labels = await getConversationLabels(conversationId);
+
+    if (contactData.phone_number) {
+      if (!labels.includes("lead_calificado")) tags.push("lead_calificado");
+      if (labels.includes("sin_telefono")) tags.push("__remove__sin_telefono");
+    } else {
+      if (!labels.includes("sin_telefono")) tags.push("sin_telefono");
+    }
+  } catch (err) {
+    console.error("❌ Error manejando lead tags:", err);
+  }
+
+  return { tags };
+}
+
+// ==================== HANDLE PHONE DETECTION ====================
+async function handlePhoneDetection(
+  conversationId: number,
+  text: string,
+  existingMessages: Message[]
+): Promise<{ reply: string | null; tags: string[] }> {
+  const tags: string[] = [];
+  const lastMessage = existingMessages[existingMessages.length - 1];
+  const phoneMatch = /(\+?\d{10,15})/.exec(text)?.[0] || lastMessage?.content?.match(/(\+?\d{10,15})/)?.[0];
+
+  if (phoneMatch) tags.push("telefono_recibido");
+
+  return {
+    reply: phoneMatch ? `📱 Hemos recibido tu teléfono: ${phoneMatch}` : null,
+    tags
+  };
+}
+
+
+async function loadKbCounter(conversationId: number): Promise<Record<string, number>> {
+  const conversation = await fetchJson<ConversationData>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+  return conversation.meta?.kb_counter || {};
+}
+
+async function saveKbCounter(conversationId: number, kbCounter: Record<string, number>) {
+  await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
+    body: JSON.stringify({ meta: { kb_counter: kbCounter } })
+  });
+}
