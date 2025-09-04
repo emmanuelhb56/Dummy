@@ -32,7 +32,7 @@ export default function RootLayout({
       >
         {children}
       </body>
-      <ChatwootWidget websiteToken={process.env.NEXT_PUBLIC_CHATWOOT_WEBSITE_TOKEN} />
+      <ChatwootWidget websiteToken={process.env.CHATWOOT_WEBSITE_TOKEN} />
     </html>
   );
 }

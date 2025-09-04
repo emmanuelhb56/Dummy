@@ -7,7 +7,7 @@ interface ChatwootWidgetProps {
 }
 
 const ChatwootWidget: React.FC<ChatwootWidgetProps> = ({
-  websiteToken = process.env.NEXT_PUBLIC_CHATWOOT_WEBSITE_TOKEN
+  websiteToken = process.env.CHATWOOT_WEBSITE_TOKEN
 }) => {
   useEffect(() => {
     // Solo ejecutar en el cliente
