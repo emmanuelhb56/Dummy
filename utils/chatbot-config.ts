@@ -455,17 +455,7 @@ export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
     maxResponses: 2,
     exceededResponse: "Ya atendimos tu solicitud prioritaria. Si surge algo más, estamos disponibles para ayudarte de inmediato."
   },
-  // 26. Contestación de saludos 
-  {
-    triggers: ["hola", "buenas", "buenas tardes", "buenas noches", "buenas noches", "buenas noches", "buenas noches", "buenas noches"],
-    response: "¡Hola! Estamos para ayudarte, ¿en qué podemos ayudarte?",
-    inbox: "principal",
-    tags: [],
-    controlTag: "kb_bienvenida",
-    maxResponses: 2,
-    exceededResponse: "Ya te respondimos. Si necesitas algo más, no dudes en hacernos saber."
-  },
-  // 27. Contestación de sí
+  // 26. Contestación de sí
   {
     triggers: ["si", "s\\b[ií]"],
     response: (hasPhone: boolean) => {
@@ -481,7 +471,7 @@ export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
     maxResponses: 2,
     exceededResponse: "Ya te respondimos. Si necesitas algo más, no dudes en hacernos saber."
   },
- //  28. Contestación de no
+  //  27. Contestación de no
   {
     triggers: ["no", "n\\b[oó]"],
     response: "¡Genial! No dudes en hacernos saber si necesitas algo más.",

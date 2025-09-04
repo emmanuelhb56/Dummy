@@ -55,7 +55,7 @@ interface Message {
   message_type: "incoming" | "outgoing" | "note";
 }
 
-// ==================== HELPER FETCH ====================
+// ==================== HELPERS ====================
 async function fetchJson<T>(url: string, options?: RequestInit, retries = 3, backoff = 500): Promise<T> {
   try {
     const res = await fetch(url, options as import("node-fetch").RequestInit);
@@ -66,8 +66,7 @@ async function fetchJson<T>(url: string, options?: RequestInit, retries = 3, bac
         await new Promise(r => setTimeout(r, backoff));
         return fetchJson<T>(url, options, retries - 1, backoff * 2);
       }
-      log("error", `❌ HTTP error ${res.status} en ${url}:`, text);
-      throw new Error(`HTTP error ${res.status} en ${url}`);
+      throw new Error(`HTTP error ${res.status} en ${url}: ${text}`);
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -122,8 +121,12 @@ async function handleConversationCreated(payload: WebhookPayload) {
   const conversationId = payload.id ?? await createConversation(contactId, INBOX_MAP.principal);
   if (!conversationId) return;
 
-  // Solo agregamos la etiqueta, no enviamos mensaje todavía
+  // Agregar etiquetas de bienvenida
   await safeAddTags(conversationId, ["auto_bienvenida", "kb_bienvenida"]);
+
+  // Enviar mensaje de bienvenida aleatorio
+  await sendBotReply(conversationId, getRandom(GREETINGS));
+  log("info", "`📩 Mensaje de bienvenida enviado en conversación ${conversationId}`");
 
   // Manejar lead tags (teléfono, etc.)
   const newTags: string[] = [];
@@ -138,14 +141,14 @@ async function handleConversationCreated(payload: WebhookPayload) {
   if (flowRule?.assignTeamId) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
   if (flowRule?.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
 
-  log("info", `✅ Conversación ${conversationId} creada; bienvenida pendiente hasta primer mensaje del usuario`);
+  log("info", "`✅ Conversación ${conversationId} creada; mensaje de bienvenida enviado`)");
 }
 
 // ==================== GPT INTEGRATION ====================
 async function generateGPTReply(
   text: string,
   contactHasPhone: boolean,
-  conversationId?: number // opcional, solo si queremos etiquetar
+  conversationId?: number
 ): Promise<string | null> {
   try {
     const completion = await openai.chat.completions.create({
@@ -168,17 +171,16 @@ async function generateGPTReply(
     console.error("❌ Error GPT:", err);
 
     if (conversationId) {
-      // 1️⃣ Agregar etiqueta para seguimiento humano
+      // Etiqueta para seguimiento humano
       await addTagsSafely(conversationId, ["error_gpt"]);
 
-      // 2️⃣ Enviar mensaje alternativo al usuario
+      // Mensaje alternativo al usuario
       await sendBotReply(
         conversationId,
         "⚠️ Nuestro asistente AI no puede responder en este momento. Un agente humano te atenderá pronto."
       );
     }
 
-    // 3️⃣ Retornar null para evitar fallback genérico duplicado
     return null;
   }
 }
