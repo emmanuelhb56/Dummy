@@ -123,7 +123,7 @@ export const KNOWLEDGE_BASE: readonly KnowledgeBaseItem[] = [
 
   // 2. Promociones y ofertas
   {
-    triggers: ["descuento", "promoción", "oferta", "rebaja", "cupón", "promociones", "promos"],
+    triggers: ["descuento", "promoción", "oferta", "rebaja", "cupón", "promociones", "promos", "promo"],
     response: (hasPhone: boolean) => randomMessage(responseWithPhoneCheck([
       "🎁 ¡Tenemos ofertas especiales este mes! Déjanos tu teléfono y te enviaremos los detalles directamente. Por ejemplo, nuestra promo semanal da un 15% adicional en planes seleccionados.",
       "🎁 ¡Excelente! Aprovecha nuestras promociones: esta semana, 2 meses gratis al contratar el plan anual. Proporciona tu teléfono para enviarte la oferta y detalles exclusivos.",
@@ -566,7 +566,7 @@ export const TAGS = [
   { title: "kb_urgente", color: TAG_COLORS.red, showInSidebar: false },
   { title : "kb_si", color: TAG_COLORS.green, showInSidebar: false },
   { title : "kb_no", color: TAG_COLORS.red, showInSidebar: false },
-  
+
   // ----------------------------
   // Soporte
   // ----------------------------
