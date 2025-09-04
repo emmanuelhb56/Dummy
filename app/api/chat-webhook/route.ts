@@ -369,12 +369,21 @@ async function getConversationMessages(conversationId: number) {
 }
 
 async function sendBotReply(conversationId: number, content: string) {
-  await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages?before=<timestamp>&limit=10`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", api_access_token: BOT_TOKEN },
-    body: JSON.stringify({ content, message_type: "outgoing" })
-  });
+  try {
+    await fetchJson(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", api_access_token: BOT_TOKEN },
+        body: JSON.stringify({ content, message_type: "outgoing" })
+      }
+    );
+    log("info", `✅ Mensaje enviado en conversación ${conversationId}:`, content);
+  } catch (err) {
+    log("error", "❌ Error enviando mensaje:", err);
+  }
 }
+
 
 async function getContactIdFromConversation(conversationId: number) {
   const data = await fetchJson<ConversationData>(
