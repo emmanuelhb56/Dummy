@@ -66,17 +66,17 @@ async function fetchJson<T>(url: string, options?: RequestInit, retries = 3, bac
         await new Promise(r => setTimeout(r, backoff));
         return fetchJson<T>(url, options, retries - 1, backoff * 2);
       }
-      console.error(`❌ HTTP error ${res.status} en ${url}: ${text}`);
+      log("error", `❌ HTTP error ${res.status} en ${url}:`, text);
       throw new Error(`HTTP error ${res.status} en ${url}`);
     }
     return (await res.json()) as T;
   } catch (err) {
     if (retries > 0) {
-      console.warn(`⚠️ Fetch falló, reintentando en ${backoff}ms...`, err);
+      log("warn", `⚠️ Fetch falló, reintentando en ${backoff}ms...`, err);
       await new Promise(r => setTimeout(r, backoff));
       return fetchJson<T>(url, options, retries - 1, backoff * 2);
     }
-    console.error(`❌ Fetch definitivo falló en ${url}:`, err);
+    log("error", `❌ Fetch definitivo falló en ${url}:`, err);
     throw err;
   }
 }
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ status: "ok" });
   } catch (err) {
-    console.error("❌ Error webhook:", err);
+    log("error", "❌ Error webhook:", err);
     return NextResponse.json({ error: "server error" }, { status: 500 });
   }
 }
@@ -123,7 +123,7 @@ async function handleConversationCreated(payload: WebhookPayload) {
   if (!conversationId) return;
 
   const labels = await getConversationLabels(conversationId);
-  if (!labels.includes("auto_bienvenida")) {
+  if (!labels.some(l => ["auto_bienvenida", "kb_bienvenida"].includes(l))) {
     await safeAddTags(conversationId, ["auto_bienvenida"]);
     await sendBotReply(conversationId, getRandom(GREETINGS));
   }
@@ -195,7 +195,7 @@ function scheduleAutoClose(conversationId: number, userMessageCount = 0) {
   if (autoCloseTimers[conversationId]) return;
 
   const timeout = BASE_TIMEOUT + TIME_INCREMENT * userMessageCount;
-  console.log(`⏳ scheduleAutoClose llamado para conversación ${conversationId}, timeout = ${timeout}ms`);
+  log("info", `⏳ scheduleAutoClose llamado para conversación ${conversationId}, timeout = ${timeout}ms`);
 
   autoCloseTimers[conversationId] = setTimeout(async () => {
     try {
@@ -213,9 +213,9 @@ function scheduleAutoClose(conversationId: number, userMessageCount = 0) {
       await closeConversation(conversationId);
 
       autoCloseSent[conversationId] = true;
-      console.log(`✅ Conversación ${conversationId} cerrada automáticamente por inactividad`);
+      log("info", `✅ Conversación ${conversationId} cerrada automáticamente por inactividad`);
     } catch (err) {
-      console.error("❌ Error en autoClose:", err);
+      log("error", "❌ Error en autoClose:", err);
     } finally {
       delete autoCloseTimers[conversationId];
     }
@@ -230,8 +230,8 @@ async function closeConversation(conversationId: number) {
       headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
       body: JSON.stringify({ status: "resolved" })
     });
-    console.log(`✅ Conversación ${conversationId} cerrada automáticamente`);
-  } catch (err) { console.error("❌ Error cerrando conversación:", err); }
+    log("info", `✅ Conversación ${conversationId} cerrada automáticamente`);
+  } catch (err) { log("error", "❌ Error cerrando conversación:", err); }
 }
 
 async function reopenConversation(conversationId: number) {
@@ -243,8 +243,8 @@ async function reopenConversation(conversationId: number) {
     });
     autoCloseSent[conversationId] = false; // ✅ reiniciar bandera
     scheduleAutoClose(conversationId); // ⬅️ reprogramar auto-close
-    console.log(`🔔 Conversación ${conversationId} reabierta`);
-  } catch (err) { console.error("❌ Error reabriendo conversación:", err); }
+    log("info", `🔔 Conversación ${conversationId} reabierta`);
+  } catch (err) { log("error", "❌ Error reabriendo conversación:", err); }
 }
 
 // ==================== CONVERSATION UPDATED ====================
@@ -274,7 +274,7 @@ async function getConversationLabels(conversationId: number): Promise<string[]> 
     // Filtrar undefined o strings vacías
     return (data.payload?.map(l => l.title).filter(Boolean)) || [];
   } catch (err) {
-    console.error("❌ Error obteniendo etiquetas:", err);
+    log("error", "❌ Error obteniendo etiquetas:", err);
     return [];
   }
 }
@@ -308,7 +308,7 @@ async function addTagsSafely(conversationId: number, tags: string[]) {
             body: JSON.stringify({ labels: [tag] }),
           }
         );
-        console.log(`🗑️ Etiqueta '${tag}' eliminada de conversación ${conversationId}`);
+        log("info", `🗑️ Etiqueta '${tag}' eliminada de conversación ${conversationId}`);
       }
     }
 
@@ -331,9 +331,9 @@ async function addTagsSafely(conversationId: number, tags: string[]) {
       }
     );
 
-    console.log(`✅ Etiquetas actualizadas para conversación ${conversationId}:`, combined);
+    log("info", `✅ Etiquetas actualizadas para conversación ${conversationId}:`, combined);
   } catch (err) {
-    console.error("❌ Error en addTagsSafely:", err);
+    log("error", "❌ Error en addTagsSafely:", err);
   }
 }
 
@@ -354,22 +354,22 @@ async function safeAddTags(conversationId: number, tags: string[]) {
       body: JSON.stringify({ labels: filteredTags }),
     });
 
-    console.log(`📌 Etiquetas agregadas a conversación ${conversationId}:`, filteredTags);
+    log("info", `📌 Etiquetas agregadas a conversación ${conversationId}:`, filteredTags);
   } catch (err) {
-    console.error("❌ Error en safeAddTags:", err);
+    log("error", "❌ Error en safeAddTags:", err);
   }
 }
 
 async function getConversationMessages(conversationId: number) {
   const data = await fetchJson<{ payload: Message[] }>(
-    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages`,
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages?before=<timestamp>&limit=10`,
     { headers: { api_access_token: PERSONAL_TOKEN } }
   );
   return data.payload;
 }
 
 async function sendBotReply(conversationId: number, content: string) {
-  await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages`, {
+  await fetchJson(`${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/messages?before=<timestamp>&limit=10`, {
     method: "POST",
     headers: { "Content-Type": "application/json", api_access_token: BOT_TOKEN },
     body: JSON.stringify({ content, message_type: "outgoing" })
@@ -396,7 +396,7 @@ async function createOrUpdateContact(name: string, email?: string) {
     );
     return contact.id;
   } catch (err) {
-    console.error("❌ Error creando contacto:", err);
+    log("error", "❌ Error creando contacto:", err);
     return undefined;
   }
 }
@@ -414,7 +414,7 @@ async function createConversation(contactId: number, inboxId: number) {
     );
     return conv.id;
   } catch (err) {
-    console.error("❌ Error creando conversación:", err);
+    log("error", "❌ Error creando conversación:", err);
     return undefined;
   }
 }
@@ -445,9 +445,9 @@ async function assignTeamIfNeeded(conversationId: number, teamId: number) {
           body: JSON.stringify({ team_id: teamId }),
         }
       );
-      console.log(`✅ Conversación ${conversationId} asignada al equipo ${teamId}`);
+      log("info", `✅ Conversación ${conversationId} asignada al equipo ${teamId}`);
     } else {
-      console.log(`ℹ️ La conversación ${conversationId} ya tiene un equipo asignado`);
+      log("info", `ℹ️ La conversación ${conversationId} ya tiene un equipo asignado`);
     }
   } catch (err) {
     console.error("❌ Error asignando equipo:", err);
@@ -517,7 +517,7 @@ async function handleMessageCreated(payload: WebhookPayload) {
   // Cache global persistente por conversación
   if (!conversationKbCache[conversationId]) {
     conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
-    console.log(`🔹 Cargamos contador de KB para la conversación ${conversationId}`);
+    log("info", `Cargamos contador de KB para la conversación ${conversationId}`);
   }
 
   // ===========================
@@ -535,7 +535,7 @@ async function handleMessageCreated(payload: WebhookPayload) {
     const kbCounter = conversationKbCache[conversationId];
 
     const count = kbCounter[kbTag] || 0;
-    console.log(`KB Tag: ${kbTag}, count: ${count}, max: ${kbMatch.maxResponses}`);
+    log("info", `KB Tag: ${kbTag}, count: ${count}, max: ${kbMatch.maxResponses}`);
 
     if (!kbMatch.maxResponses || count < kbMatch.maxResponses) {
       reply = typeof kbMatch.response === "function"
@@ -554,7 +554,7 @@ async function handleMessageCreated(payload: WebhookPayload) {
       reply = kbMatch.exceededResponse || reply;
     }
 
-    console.log("KB Counter actualizado:", kbCounter);
+    log("info", `✅ Contador de KB actualizado para la conversación ${conversationId}`, kbCounter);
   }
 
   // ===========================
@@ -632,7 +632,7 @@ async function handleLeadTags(
       if (!labels.includes("sin_telefono")) tags.push("sin_telefono");
     }
   } catch (err) {
-    console.error("❌ Error manejando lead tags:", err);
+    log("error", "❌ Error manejando lead tags:", err);
   }
 
   return { tags };
@@ -646,16 +646,69 @@ async function handlePhoneDetection(
 ): Promise<{ reply: string | null; tags: string[] }> {
   const tags: string[] = [];
   const lastMessage = existingMessages[existingMessages.length - 1];
-  const phoneMatch = /(\+?\d{10,15})/.exec(text)?.[0] || lastMessage?.content?.match(/(\+?\d{10,15})/)?.[0];
 
-  if (phoneMatch) tags.push("telefono_recibido");
+  // Regex más estricto: +52 opcional o 10 dígitos directos
+  const phoneRegex = /(?:\+52)?\d{10}/;
+  const phoneMatch =
+    text.match(phoneRegex)?.[0] || lastMessage?.content?.match(phoneRegex)?.[0];
 
-  return {
-    reply: phoneMatch ? `📱 Hemos recibido tu teléfono: ${phoneMatch}` : null,
-    tags
-  };
+  if (phoneMatch) {
+    const cleanPhone = normalizeMexPhone(phoneMatch);
+    if (cleanPhone) {
+      tags.push("telefono_recibido");
+      await updateContactFromConversation(conversationId, { phone_number: cleanPhone });
+
+      return {
+        reply: `📱 Hemos registrado tu teléfono: ${cleanPhone}`,
+        tags,
+      };
+    }
+  }
+
+  return { reply: null, tags };
 }
 
+// ==================== NORMALIZE PHONE ====================
+function normalizeMexPhone(phone: string): string | null {
+  // quita caracteres no numéricos
+  let digits = phone.replace(/\D/g, "");
+
+  // Si empieza con 52 y después 10 dígitos, lo dejamos como está
+  if (digits.startsWith("52") && digits.length === 12) {
+    return `+${digits}`;
+  }
+
+  // Si tiene solo 10 dígitos (nacional), agregamos +52
+  if (digits.length === 10) {
+    return `+52${digits}`;
+  }
+
+  // Si no cumple, lo descartamos
+  return null;
+}
+
+// ==================== UPDATE CONTACT ====================
+async function updateContactFromConversation(
+  conversationId: number,
+  contactData: Partial<ContactData>
+) {
+  try {
+    await fetchJson(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}/contact`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          api_access_token: PERSONAL_TOKEN,
+        },
+        body: JSON.stringify(contactData),
+      }
+    );
+    log("info", `✅ Contacto actualizado en conversación ${conversationId}`, contactData);
+  } catch (err) {
+    log("error", `❌ Error actualizando contacto en conversación ${conversationId}:`, err);
+  }
+}
 
 async function loadKbCounter(conversationId: number): Promise<Record<string, number>> {
   const conversation = await fetchJson<ConversationData>(
@@ -671,4 +724,8 @@ async function saveKbCounter(conversationId: number, kbCounter: Record<string, n
     headers: { "Content-Type": "application/json", api_access_token: PERSONAL_TOKEN },
     body: JSON.stringify({ meta: { kb_counter: kbCounter } })
   });
+}
+
+function log(level: "info"|"warn"|"error", msg: string, data?: any) {
+  console[level](`[${new Date().toISOString()}] ${msg}`, data || "");
 }
