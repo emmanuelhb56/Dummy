@@ -122,26 +122,23 @@ async function handleConversationCreated(payload: WebhookPayload) {
   const conversationId = payload.id ?? await createConversation(contactId, INBOX_MAP.principal);
   if (!conversationId) return;
 
-  const labels = await getConversationLabels(conversationId);
-  if (!labels.some(l => ["auto_bienvenida", "kb_bienvenida"].includes(l))) {
-    await safeAddTags(conversationId, ["auto_bienvenida"]);
-    await sendBotReply(conversationId, getRandom(GREETINGS));
-  }
+  // Solo agregamos la etiqueta, no enviamos mensaje todavía
+  await safeAddTags(conversationId, ["auto_bienvenida", "kb_bienvenida"]);
 
+  // Manejar lead tags (teléfono, etc.)
   const newTags: string[] = [];
-  await handleLeadTags(conversationId, contactId);
+  const leadTags = await handleLeadTags(conversationId, contactId);
+  newTags.push(...leadTags.tags);
   if (newTags.length) await addTagsSafely(conversationId, newTags);
 
+  // Asignación de equipo y prioridad
   const inboxKey = getInboxKeyById(INBOX_MAP.principal) as keyof typeof FLOW_RULES | undefined;
   const flowRule = inboxKey ? FLOW_RULES[inboxKey] : undefined;
 
   if (flowRule?.assignTeamId) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
   if (flowRule?.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
 
-  const existingMessages = await getConversationMessages(conversationId);
-  const userMessageCount = existingMessages.filter(m => m.message_type === "incoming").length;
-  scheduleAutoClose(conversationId, userMessageCount);
-
+  log("info", `✅ Conversación ${conversationId} creada; bienvenida pendiente hasta primer mensaje del usuario`);
 }
 
 // ==================== GPT INTEGRATION ====================
@@ -220,6 +217,151 @@ function scheduleAutoClose(conversationId: number, userMessageCount = 0) {
       delete autoCloseTimers[conversationId];
     }
   }, timeout);
+}
+
+// ==================== MESSAGE CREATED ====================
+async function handleMessageCreated(payload: WebhookPayload) {
+  const conversationId = payload.conversation?.id;
+  const text = payload.content?.trim();
+  if (!conversationId || !text) return;
+
+  const now = Date.now();
+  const normalize = (str: string) => str?.replace(/\s+/g, " ").trim() || "";
+
+  // Evitar mensajes duplicados en corto tiempo
+  if (
+    lastProcessedMessage &&
+    lastProcessedMessage.conversationId === conversationId &&
+    normalize(lastProcessedMessage.content) === normalize(text) &&
+    now - lastProcessedMessage.timestamp < MESSAGE_COOLDOWN
+  ) return;
+
+  lastProcessedMessage = { conversationId, content: text, timestamp: now };
+
+  const conversationData = await fetchJson<ConversationData>(
+    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
+    { headers: { api_access_token: PERSONAL_TOKEN } }
+  );
+
+  // 🔹 Reabrir conversación si estaba resuelta
+  if (conversationData.status === "resolved") {
+    await reopenConversation(conversationId);
+    await sendBotReply(conversationId, getRandom(REOPENINGS));
+  }
+
+  const inboxKey = getInboxKeyById(conversationData.inbox_id) as keyof typeof FLOW_RULES | undefined;
+  const existingLabels = await getConversationLabels(conversationId);
+
+  // 🔹 Obtener datos de contacto
+  const contactId = await getContactIdFromConversation(conversationId);
+  let contactHasPhone = false;
+  if (contactId) {
+    const contactData = await fetchJson<ContactData>(
+      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
+      { headers: { api_access_token: PERSONAL_TOKEN } }
+    );
+    contactHasPhone = !!contactData.phone_number;
+  }
+
+  const newTags: string[] = [];
+  if (contactId) {
+    const leadTags = await handleLeadTags(conversationId, contactId);
+    newTags.push(...leadTags.tags);
+  }
+
+  let reply: string | null = null;
+
+  // ===========================
+  // ENVÍO DE MENSAJE DE BIENVENIDA
+  // ===========================
+  if (existingLabels.includes("auto_bienvenida")) {
+    reply = getRandom(GREETINGS);
+    // Remover la etiqueta para que no se repita
+    await addTagsSafely(conversationId, ["__remove__auto_bienvenida"]);
+    log("info", `📩 Enviando mensaje de bienvenida a conversación ${conversationId}`);
+  }
+
+  // ===========================
+  // KB CON MAX RESPONSES
+  // ===========================
+  if (!conversationKbCache[conversationId]) {
+    conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
+  }
+
+  const kbMatch = KNOWLEDGE_BASE.find(kb =>
+    text.toLowerCase().includes(kb.triggers.map(t => t.toLowerCase()).join("|"))
+  );
+
+  if (kbMatch) {
+    const kbTag = (kbMatch.controlTag || kbMatch.triggers[0]).toLowerCase().trim();
+    const kbCounter = conversationKbCache[conversationId];
+    const count = kbCounter[kbTag] || 0;
+
+    if (!kbMatch.maxResponses || count < kbMatch.maxResponses) {
+      reply = reply || (typeof kbMatch.response === "function" ? kbMatch.response(contactHasPhone) : kbMatch.response);
+      kbCounter[kbTag] = count + 1;
+      conversationKbCache[conversationId] = kbCounter;
+      await saveKbCounter(conversationId, kbCounter);
+
+      if (kbMatch.controlTag && !existingLabels.includes(kbMatch.controlTag)) newTags.push(kbMatch.controlTag);
+      if (kbMatch.tags?.length) newTags.push(...kbMatch.tags);
+    } else {
+      reply = reply || kbMatch.exceededResponse;
+    }
+  }
+
+  // ===========================
+  // DETECCIÓN DE TELÉFONO
+  // ===========================
+  const phoneResult = await handlePhoneDetection(conversationId, text, await getConversationMessages(conversationId));
+  if (phoneResult.reply) reply = reply || phoneResult.reply;
+  newTags.push(...phoneResult.tags);
+
+  // ===========================
+  // PALABRAS PROHIBIDAS
+  // ===========================
+  const detectedBadWord = BAD_WORDS.find(w => text.toLowerCase().includes(w.word));
+  if (detectedBadWord) {
+    const severityLevel: "leve" | "grave" = detectedBadWord.severity || "leve";
+    const filteredResponses = BAD_WORDS_RESPONSES.filter(r => r.severity === severityLevel);
+    reply = reply || getRandom(filteredResponses).response;
+    newTags.push("cliente-grosero", "caso_especial");
+  }
+
+  // ===========================
+  // RESPUESTA GPT POR DEFECTO
+  // ===========================
+  if (!reply) {
+    reply = await generateGPTReply(text, contactHasPhone, conversationId);
+  }
+
+  // ===========================
+  // COMBINAR TAGS Y APLICAR
+  // ===========================
+  const flowRule = inboxKey ? FLOW_RULES[inboxKey] : undefined;
+  const flowTags = flowRule?.tags ?? [];
+  const combinedTags = Array.from(
+    new Set([...existingLabels.filter(l => PERMANENT_TAGS.includes(l)), ...newTags, ...flowTags])
+  );
+  await addTagsSafely(conversationId, combinedTags);
+
+  // ===========================
+  // ENVIAR RESPUESTA
+  // ===========================
+  if (reply) await sendBotReply(conversationId, reply);
+
+  // ===========================
+  // ASIGNAR EQUIPO Y PRIORIDAD
+  // ===========================
+  if (flowRule?.assignTeamId && !conversationData.team?.id) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
+  if (flowRule?.priority && !conversationData.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
+
+  // ===========================
+  // PROGRAMAR AUTO-CLOSE
+  // ===========================
+  const existingMessages = await getConversationMessages(conversationId);
+  const userMessageCount = existingMessages.filter(m => m.message_type === "incoming").length;
+  scheduleAutoClose(conversationId, userMessageCount);
 }
 
 // ==================== CONVERSATIONS ====================
@@ -472,152 +614,6 @@ async function setPriorityIfNeeded(conversationId: number, priority: "low" | "me
       body: JSON.stringify({ priority })
     });
   } catch (err) { console.error("❌ Error estableciendo prioridad:", err); }
-}
-// ==================== MESSAGE CREATED ====================
-async function handleMessageCreated(payload: WebhookPayload) {
-  const conversationId = payload.conversation?.id;
-  const text = payload.content?.trim();
-  if (!conversationId || !text) return;
-
-  const now = Date.now();
-  const normalize = (str: string) => str?.replace(/\s+/g, " ").trim() || "";
-
-  // Evitar mensajes duplicados en corto tiempo
-  if (
-    lastProcessedMessage &&
-    lastProcessedMessage.conversationId === conversationId &&
-    normalize(lastProcessedMessage.content) === normalize(text) &&
-    now - lastProcessedMessage.timestamp < MESSAGE_COOLDOWN
-  ) return;
-
-  lastProcessedMessage = { conversationId, content: text, timestamp: now };
-
-  const conversationData = await fetchJson<ConversationData>(
-    `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
-    { headers: { api_access_token: PERSONAL_TOKEN } }
-  );
-
-  // 🔹 Reabrir conversación si estaba resuelta
-  if (conversationData.status === "resolved") {
-    await reopenConversation(conversationId);
-    await sendBotReply(conversationId, getRandom(REOPENINGS));
-  }
-
-  const inboxKey = getInboxKeyById(conversationData.inbox_id) as keyof typeof FLOW_RULES | undefined;
-  const existingLabels = await getConversationLabels(conversationId);
-
-  // 🔹 Obtener datos de contacto
-  const contactId = await getContactIdFromConversation(conversationId);
-  let contactHasPhone = false;
-  if (contactId) {
-    const contactData = await fetchJson<ContactData>(
-      `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
-      { headers: { api_access_token: PERSONAL_TOKEN } }
-    );
-    contactHasPhone = !!contactData.phone_number;
-  }
-
-  // 🔹 Tags nuevos acumulados
-  const newTags: string[] = [];
-  if (contactId) await handleLeadTags(conversationId, contactId);
-
-  let reply: string | null = null;
-
-  // Cache global persistente por conversación
-  if (!conversationKbCache[conversationId]) {
-    conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
-    log("info", `Cargamos contador de KB para la conversación ${conversationId}`);
-  }
-
-  // ===========================
-  // KB CON MAX RESPONSES
-  // ===========================
-  const kbMatch = KNOWLEDGE_BASE.find(kb =>
-    kb.triggers.some(t => text.toLowerCase().includes(t.toLowerCase()))
-  );
-
-  if (kbMatch) {
-    const kbTag = (kbMatch.controlTag || kbMatch.triggers[0]).toLowerCase().trim();
-
-    // 🔹 Asegurarnos de tener el contador en cache
-    conversationKbCache[conversationId] ||= await loadKbCounter(conversationId) || {};
-    const kbCounter = conversationKbCache[conversationId];
-
-    const count = kbCounter[kbTag] || 0;
-    log("info", `KB Tag: ${kbTag}, count: ${count}, max: ${kbMatch.maxResponses}`);
-
-    if (!kbMatch.maxResponses || count < kbMatch.maxResponses) {
-      reply = typeof kbMatch.response === "function"
-        ? kbMatch.response(contactHasPhone)
-        : kbMatch.response;
-
-      // 🔹 Actualizar contador en cache y persistir
-      kbCounter[kbTag] = count + 1;
-      conversationKbCache[conversationId] = kbCounter;
-      await saveKbCounter(conversationId, kbCounter);
-
-      // 🔹 Tags de KB
-      if (kbMatch.controlTag && !existingLabels.includes(kbMatch.controlTag)) newTags.push(kbMatch.controlTag);
-      if (kbMatch.tags?.length) newTags.push(...kbMatch.tags);
-    } else {
-      reply = kbMatch.exceededResponse || reply;
-    }
-
-    log("info", `✅ Contador de KB actualizado para la conversación ${conversationId}`, kbCounter);
-  }
-
-  // ===========================
-  // Detección de teléfono
-  // ===========================
-  const phoneResult = await handlePhoneDetection(conversationId, text, await getConversationMessages(conversationId));
-  if (phoneResult.reply) reply = phoneResult.reply;
-  newTags.push(...phoneResult.tags);
-
-  // ===========================
-  // Palabras prohibidas
-  // ===========================
-  const detectedBadWord = BAD_WORDS.find(w => text.toLowerCase().includes(w.word));
-  if (detectedBadWord) {
-    const severityLevel: "leve" | "grave" = detectedBadWord.severity || "leve";
-    const filteredResponses = BAD_WORDS_RESPONSES.filter(r => r.severity === severityLevel);
-    reply = getRandom(filteredResponses).response;
-    newTags.push("cliente-grosero", "caso_especial");
-  }
-
-  // ===========================
-  // Respuesta GPT por defecto
-  // ===========================
-  if (!reply) {
-    reply = await generateGPTReply(text, contactHasPhone, conversationId);
-  }
-
-  // ===========================
-  // Combinar tags y aplicar
-  // ===========================
-  const flowRule = inboxKey ? FLOW_RULES[inboxKey] : undefined;
-  const flowTags = flowRule?.tags ?? [];
-  const combinedTags = Array.from(
-    new Set([...existingLabels.filter(l => PERMANENT_TAGS.includes(l)), ...newTags, ...flowTags])
-  );
-  await addTagsSafely(conversationId, combinedTags);
-
-  // ===========================
-  // Enviar respuesta
-  // ===========================
-  if (reply) await sendBotReply(conversationId, reply);
-
-  // ===========================
-  // Asignar equipo y prioridad
-  // ===========================
-  if (flowRule?.assignTeamId && !conversationData.team?.id) await assignTeamIfNeeded(conversationId, flowRule.assignTeamId);
-  if (flowRule?.priority && !conversationData.priority) await setPriorityIfNeeded(conversationId, flowRule.priority);
-
-  // ===========================
-  // Programar auto-close
-  // ===========================
-  const existingMessages = await getConversationMessages(conversationId);
-  const userMessageCount = existingMessages.filter(m => m.message_type === "incoming").length;
-  scheduleAutoClose(conversationId, userMessageCount);
 }
 
 // ==================== HANDLE LEAD TAGS ====================
