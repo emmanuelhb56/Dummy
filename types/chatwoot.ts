@@ -1,4 +1,5 @@
 export interface WebhookPayload {
+  current_conversation: any;
   event: string;
   message?: {
     id?: number;

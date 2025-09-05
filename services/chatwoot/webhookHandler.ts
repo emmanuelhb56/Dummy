@@ -22,7 +22,7 @@ import { handlePhoneDetection } from "../utils/leadDetection";
  * Helper seguro para obtener conversationId
  */
 function getConversationId(payload: WebhookPayload): number | undefined {
-  return payload.conversation?.id;
+  return payload.conversation?.id || payload.current_conversation?.id;
 }
 
 /**
@@ -48,10 +48,14 @@ export async function handleWebhook(payload: WebhookPayload) {
       return;
     }
 
-    // 🔹 Nueva conversación → solo menú inicial
-    if (event === "conversation_created") {
-      log("info", `🌟 Nueva conversación ${conversationId}, enviando menú inicial`);
+    // 🔹 Nueva conversación → enviar menú inicial
+    if (event === "conversation_created" || event === "webwidget_triggered") {
+      log("info", `🌟 Conversación ${conversationId} iniciada o widget abierto, enviando menú inicial`);
       await sendBotReply(conversationId, MENU_MESSAGE);
+
+      // ⚡ Agregar etiqueta indicando que se abrió el widget
+      await addTagsSafely(conversationId, ["widget_abierto"]);
+
       scheduleAutoClose(conversationId, 1);
       return;
     }
@@ -63,7 +67,6 @@ export async function handleWebhook(payload: WebhookPayload) {
 
       log("info", `💬 Mensaje entrante en conversación ${conversationId}: ${rawText}`);
 
-      // Normalizar mensaje para handlePhoneDetection
       const safeMessage: Message = {
         content: message.content || "",
         message_type: message.message_type,
