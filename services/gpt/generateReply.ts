@@ -1,4 +1,4 @@
-import { fetchJson } from "@/services/utils/fetchJson";
+import { fetchJsonWithRetry } from "@/services/utils/fetchJson";
 
 import type { ConversationData, ContactData } from "@/types/chatwoot";
 import { ACCOUNT_ID, CHATWOOT_URL, KNOWLEDGE_BASE, MENU_MESSAGE, PERSONAL_TOKEN } from "@/services/utils/kb-clickbalance";
@@ -9,13 +9,13 @@ import { log } from "@/services/utils/logging";
 export async function generateReply(conversationId: number, userMessage: string): Promise<string> {
   try {
     // 1️⃣ Obtener conversación
-    const conversation = await fetchJson<ConversationData>(
+    const conversation = await fetchJsonWithRetry<ConversationData>(
       `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/conversations/${conversationId}`,
       { headers: { api_access_token: PERSONAL_TOKEN } }
     );
 
     // 2️⃣ Obtener contacto
-    const contact: ContactData = await fetchJson<ContactData>(
+    const contact: ContactData = await fetchJsonWithRetry<ContactData>(
       `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${conversation.contact_id}`,
       { headers: { api_access_token: PERSONAL_TOKEN } }
     );

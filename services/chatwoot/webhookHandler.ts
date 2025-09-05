@@ -9,8 +9,9 @@ import {
 import { generateReply } from "@/services/gpt/generateReply";
 import { addTagsSafely, sendBotReply, sendBotReplySafe, sendKBEntry } from "./chatwoot-services";
 import { scheduleAutoClose } from "@/services/utils/autoClose";
-import { WebhookPayload } from "@/types/chatwoot";
+import { Message, WebhookPayload } from "@/types/chatwoot";
 import { log } from "../utils/logging";
+import { handlePhoneDetection } from "../utils/leadDetection";
 
 /**
  * Helper seguro para obtener conversationId
@@ -42,6 +43,21 @@ export async function handleWebhook(payload: WebhookPayload) {
       const text = rawText.toLowerCase(); // para comparaciones case-insensitive
 
       log("info", `💬 Mensaje entrante en conversación ${conversationId}: ${rawText}`);
+
+      const safeMessage: Message = {
+        content: message.content || "", // nunca undefined
+        message_type: message.message_type,
+        tags: message.tags
+      };
+
+      // ------------------- 0️⃣ Detectar teléfono ------------------- 
+      const detection = await handlePhoneDetection(conversationId, text, [safeMessage]);
+      if (detection.reply) {
+        await sendBotReplySafe(conversationId, detection.reply);
+      }
+      if (detection.tags.length) {
+        await addTagsSafely(conversationId, detection.tags);
+      }
 
       // 0️⃣ Small talk: interceptar antes que todo
       if (SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {
