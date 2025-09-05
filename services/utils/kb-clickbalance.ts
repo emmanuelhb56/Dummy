@@ -272,10 +272,10 @@ export function shouldUseGPT(userText: string, kb: KBEntry[]): boolean {
   return findKBEntry(userText, kb) === null;
 }
 
-export const CHATWOOT_URL = "https://chat-soporte.clickbalance.net";
-export const ACCOUNT_ID = "1" 
-export const PERSONAL_TOKEN ="AHJNAzeGUD33Q4ftdfLAFijy";
-export const BOT_TOKEN = "";
+export const CHATWOOT_URL = process.env.CHATWOOT_URL || "https://chat-soporte.clickbalance.net";
+export const ACCOUNT_ID = process.env.ACCOUNT_ID || "1";
+export const PERSONAL_TOKEN = process.env.PERSONAL_TOKEN || "AHJNAzeGUD33Q4ftdfLAFijy";
+export const BOT_TOKEN = process.env.BOT_TOKEN || "tYXRfCAJ7T8M73AcrJoZGmQv";
 
 export const PERMANENT_TAGS = [
   "soporte_facturacion",
