@@ -33,29 +33,20 @@ export async function handleWebhook(payload: WebhookPayload) {
     const { event, message } = payload;
     const conversationId = getConversationId(payload);
 
-    // 🔹 Evento contact_updated → solo actualizar datos del contacto si es necesario
-    if (event === "contact_updated") {
-      log("info", `ℹ️ Contacto actualizado: ${JSON.stringify(payload)}`);
-      if (conversationId) {
-        await handlePhoneDetection(conversationId, message?.content ?? "", []);
-      }
-      return;
-    }
-
-    // 🔹 Si no hay conversationId, ignorar los eventos que requieren conversación
+    // 🔹 Si no hay conversationId, ignorar eventos que requieren conversación
     if (!conversationId) {
       log("warn", "No se encontró conversationId, ignorando evento", payload);
       return;
     }
 
-    // 🔹 Nueva conversación → enviar menú inicial
-    if (event === "conversation_created" || event === "webwidget_triggered") {
+    const conversationLabels = payload.conversation?.labels || [];
+
+    // 🔹 Nueva conversación o widget abierto → enviar menú inicial solo si no se ha enviado
+    const menuSent = conversationLabels.includes("menu_enviado");
+    if ((event === "conversation_created" || event === "webwidget_triggered") && !menuSent) {
       log("info", `🌟 Conversación ${conversationId} iniciada o widget abierto, enviando menú inicial`);
       await sendBotReply(conversationId, MENU_MESSAGE);
-
-      // ⚡ Agregar etiqueta indicando que se abrió el widget
-      await addTagsSafely(conversationId, ["widget_abierto"]);
-
+      await addTagsSafely(conversationId, ["menu_enviado", "widget_abierto"]);
       scheduleAutoClose(conversationId, 1);
       return;
     }
@@ -78,10 +69,12 @@ export async function handleWebhook(payload: WebhookPayload) {
       if (detection.reply) await sendBotReplySafe(conversationId, detection.reply);
       if (detection.tags.length) await addTagsSafely(conversationId, detection.tags);
 
-      // 0️⃣ Small talk: interceptar antes que todo
-      if (SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {
+      // 0️⃣ Small talk: interceptar antes que todo (solo si no se ha respondido small talk)
+      const smallTalkHandled = conversationLabels.includes("small_talk_respondido");
+      if (!smallTalkHandled && SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {
         log("info", `🔹 Small talk detectado en conversación ${conversationId}`);
         await sendBotReplySafe(conversationId, "¡Hola! Escribe 'menú' para ver las opciones de soporte.");
+        await addTagsSafely(conversationId, ["small_talk_respondido"]);
         return;
       }
 
@@ -129,13 +122,14 @@ export async function handleWebhook(payload: WebhookPayload) {
         return;
       }
 
-      // 4️⃣ Fallback: usar GPT
-      if (shouldUseGPT(text, KNOWLEDGE_BASE)) {
+      // 4️⃣ Fallback: usar GPT (solo si no se ha hecho antes)
+      const gptFallbackHandled = conversationLabels.includes("gpt_fallback_respondido");
+      if (shouldUseGPT(text, KNOWLEDGE_BASE) && !gptFallbackHandled) {
         log("info", `🔹 Fallback GPT activado para conversación ${conversationId}`);
         try {
           const reply = await generateReply(conversationId, rawText);
           await sendBotReplySafe(conversationId, reply);
-          await addTagsSafely(conversationId, ["gpt_fallback"]);
+          await addTagsSafely(conversationId, ["gpt_fallback_respondido"]);
         } catch (err) {
           log("error", `Error generando respuesta GPT en conversación ${conversationId}`, err);
           await sendBotReplySafe(conversationId, "❌ Ocurrió un error al generar la respuesta, intenta nuevamente.");

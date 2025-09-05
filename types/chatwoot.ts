@@ -25,6 +25,7 @@ export interface ConversationData {
   team?: { id: number };
   team_id?: number;
   assignee?: { id: number };
+  labels?: string[];
 }
 
 export interface ContactData {
