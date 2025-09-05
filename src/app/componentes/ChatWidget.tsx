@@ -3,11 +3,13 @@
 import { useEffect } from 'react';
 
 interface ChatwootWidgetProps {
-  websiteToken?: string;
+  websiteToken: string;
+  baseUrl: string;
 }
 
 const ChatwootWidget: React.FC<ChatwootWidgetProps> = ({
-  websiteToken = process.env.CHATWOOT_WEBSITE_TOKEN
+  websiteToken,
+  baseUrl
 }) => {
   useEffect(() => {
     // Solo ejecutar en el cliente
@@ -35,7 +37,7 @@ const ChatwootWidget: React.FC<ChatwootWidgetProps> = ({
         if (window.chatwootSDK) {
           window.chatwootSDK.run({
             websiteToken: websiteToken,
-            baseUrl: 'https://app.chatwoot.com'
+            baseUrl: baseUrl
           });
         }
       };
@@ -45,14 +47,14 @@ const ChatwootWidget: React.FC<ChatwootWidgetProps> = ({
       // Si ya existe, solo inicializar
       window.chatwootSDK.run({
         websiteToken: websiteToken,
-        baseUrl: 'https://app.chatwoot.com'
+        baseUrl: baseUrl
       });
     }
 
     return () => {
       // Limpieza opcional si es necesario
     };
-  }, [websiteToken]);
+  }, [websiteToken, baseUrl]);
 
   return null;
 };
