@@ -94,28 +94,59 @@ export function canRespond(conversationKey: string, entry: KBEntry, cooldown = 3
 }
 
 export async function sendKBEntry(conversationId: number, entry: KBEntry) {
-  if (!canRespond(conversationId.toString(), entry)) return;
+  try {
+    // ⚡ Verificar si podemos responder
+    if (!canRespond(conversationId.toString(), entry)) {
+      log("warn", `No se puede responder KBEntry ${entry.id} en conversación ${conversationId}`);
+      return;
+    }
 
-  let text = entry.response || "";
-  if (entry.followups?.length) {
-    text += "\n\nSiguientes pasos:\n" + entry.followups.map(f => `• ${f}`).join("\n");
+    // 🔹 Construir mensaje
+    let text = entry.response || "";
+    if (entry.followups?.length) {
+      text += "\n\nSiguientes pasos:\n" + entry.followups.map(f => `• ${f}`).join("\n");
+    }
+
+    // 🔹 Enviar mensaje principal
+    try {
+      await sendBotReplySafe(conversationId, text);
+      log("info", `KBEntry enviado: ${entry.id} a conversación ${conversationId}`);
+    } catch (err) {
+      log("error", `Error enviando texto de KBEntry ${entry.id}`, err);
+      await sendBotReplySafe(conversationId, "❌ Hubo un problema al enviar la información. Intenta de nuevo.");
+    }
+
+    // 🔹 Agregar tags
+    try {
+      if (entry.actions?.addTags?.length || entry.tags?.length) {
+        await addTagsSafely(conversationId, entry.actions?.addTags || entry.tags || []);
+      }
+    } catch (err) {
+      log("error", `Error agregando tags de KBEntry ${entry.id}`, err);
+    }
+
+    // 🔹 Asignar equipo
+    try {
+      if (entry.actions?.assignTeamId) {
+        await assignTeamIfNeeded(conversationId, entry.actions.assignTeamId);
+      }
+    } catch (err) {
+      log("error", `Error asignando equipo de KBEntry ${entry.id}`, err);
+    }
+
+    // 🔹 Prioridad
+    try {
+      if (entry.actions?.priority) {
+        await setPriorityIfNeeded(conversationId, entry.actions.priority);
+      }
+    } catch (err) {
+      log("error", `Error estableciendo prioridad de KBEntry ${entry.id}`, err);
+    }
+
+  } catch (err) {
+    log("error", `Error inesperado en sendKBEntry para conversación ${conversationId}`, err);
+    await sendBotReplySafe(conversationId, "❌ Hubo un error inesperado, intenta nuevamente.");
   }
-
-  await sendBotReplySafe(conversationId, text);
-
-  if (entry.actions?.addTags?.length || entry.tags?.length) {
-    await addTagsSafely(conversationId, entry.actions?.addTags || entry.tags || []);
-  }
-
-  if (entry.actions?.assignTeamId) {
-    await assignTeamIfNeeded(conversationId, entry.actions.assignTeamId);
-  }
-
-  if (entry.actions?.priority) {
-    await setPriorityIfNeeded(conversationId, entry.actions.priority);
-  }
-
-  log("info", `KBEntry enviado: ${entry.id} a conversación ${conversationId}`);
 }
 
 // ----------------- Etiquetas -----------------

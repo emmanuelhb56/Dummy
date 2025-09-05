@@ -9,6 +9,7 @@ import {
 import { generateReply } from "@/services/gpt/generateReply";
 import { 
   addTagsSafely, 
+  getConversationLabels, 
   sendBotReply, 
   sendBotReplySafe, 
   sendKBEntry 
@@ -33,13 +34,13 @@ export async function handleWebhook(payload: WebhookPayload) {
     const { event, message } = payload;
     const conversationId = getConversationId(payload);
 
-    // 🔹 Si no hay conversationId, ignorar eventos que requieren conversación
     if (!conversationId) {
       log("warn", "No se encontró conversationId, ignorando evento", payload);
       return;
     }
 
-    const conversationLabels = payload.conversation?.labels || [];
+    // 🔹 Obtener etiquetas actualizadas de la conversación
+    const conversationLabels = await getConversationLabels(conversationId);
 
     // 🔹 Nueva conversación o widget abierto → enviar menú inicial solo si no se ha enviado
     const menuSent = conversationLabels.includes("menu_enviado");
@@ -69,7 +70,7 @@ export async function handleWebhook(payload: WebhookPayload) {
       if (detection.reply) await sendBotReplySafe(conversationId, detection.reply);
       if (detection.tags.length) await addTagsSafely(conversationId, detection.tags);
 
-      // 0️⃣ Small talk: interceptar antes que todo (solo si no se ha respondido small talk)
+      // 0️⃣ Small talk: interceptar antes que todo
       const smallTalkHandled = conversationLabels.includes("small_talk_respondido");
       if (!smallTalkHandled && SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {
         log("info", `🔹 Small talk detectado en conversación ${conversationId}`);
@@ -95,6 +96,7 @@ export async function handleWebhook(payload: WebhookPayload) {
             log("info", `🔹 Selección de menú válida: ${text} → ${kbId}`);
             try {
               await sendKBEntry(conversationId, entry);
+              await addTagsSafely(conversationId, ["menu_enviado"]);
             } catch (err) {
               log("error", `Error enviando KBEntry en conversación ${conversationId}`, err);
               await sendBotReplySafe(conversationId, "❌ Ocurrió un error al obtener la información, intenta nuevamente.");
