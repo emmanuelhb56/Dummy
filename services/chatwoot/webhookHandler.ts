@@ -7,7 +7,12 @@ import {
   SMALL_TALK_TRIGGERS 
 } from "@/services/utils/kb-clickbalance";
 import { generateReply } from "@/services/gpt/generateReply";
-import { addTagsSafely, sendBotReply, sendBotReplySafe, sendKBEntry } from "./chatwoot-services";
+import { 
+  addTagsSafely, 
+  sendBotReply, 
+  sendBotReplySafe, 
+  sendKBEntry 
+} from "./chatwoot-services";
 import { scheduleAutoClose } from "@/services/utils/autoClose";
 import { Message, WebhookPayload } from "@/types/chatwoot";
 import { log } from "../utils/logging";
@@ -27,7 +32,21 @@ export async function handleWebhook(payload: WebhookPayload) {
   try {
     const { event, message } = payload;
     const conversationId = getConversationId(payload);
-    if (!conversationId) return log("error", "No se encontró conversationId", payload);
+
+    // 🔹 Evento contact_updated → solo actualizar datos del contacto si es necesario
+    if (event === "contact_updated") {
+      log("info", `ℹ️ Contacto actualizado: ${JSON.stringify(payload)}`);
+      if (conversationId) {
+        await handlePhoneDetection(conversationId, message?.content ?? "", []);
+      }
+      return;
+    }
+
+    // 🔹 Si no hay conversationId, ignorar los eventos que requieren conversación
+    if (!conversationId) {
+      log("warn", "No se encontró conversationId, ignorando evento", payload);
+      return;
+    }
 
     // 🔹 Nueva conversación → solo menú inicial
     if (event === "conversation_created") {
@@ -40,24 +59,21 @@ export async function handleWebhook(payload: WebhookPayload) {
     // 🔹 Nuevo mensaje entrante
     if (event === "message_created" && message?.message_type === "incoming") {
       const rawText = (message.content || "").trim();
-      const text = rawText.toLowerCase(); // para comparaciones case-insensitive
+      const text = rawText.toLowerCase();
 
       log("info", `💬 Mensaje entrante en conversación ${conversationId}: ${rawText}`);
 
+      // Normalizar mensaje para handlePhoneDetection
       const safeMessage: Message = {
-        content: message.content || "", // nunca undefined
+        content: message.content || "",
         message_type: message.message_type,
-        tags: message.tags
+        tags: message.tags || []
       };
 
       // ------------------- 0️⃣ Detectar teléfono ------------------- 
       const detection = await handlePhoneDetection(conversationId, text, [safeMessage]);
-      if (detection.reply) {
-        await sendBotReplySafe(conversationId, detection.reply);
-      }
-      if (detection.tags.length) {
-        await addTagsSafely(conversationId, detection.tags);
-      }
+      if (detection.reply) await sendBotReplySafe(conversationId, detection.reply);
+      if (detection.tags.length) await addTagsSafely(conversationId, detection.tags);
 
       // 0️⃣ Small talk: interceptar antes que todo
       if (SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {
