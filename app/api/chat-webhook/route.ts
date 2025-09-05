@@ -698,7 +698,7 @@ async function handlePhoneDetection(
 // ==================== NORMALIZE PHONE ====================
 function normalizeMexPhone(phone: string): string | null {
   // Solo dejar números
-  let digits = phone.replace(/\D/g, "");
+  const digits = phone.replace(/\D/g, "");
 
   // Quitar el 52 inicial si ya lo tiene y es correcto
   if (digits.length === 12 && digits.startsWith("52")) return `+${digits}`;
@@ -747,6 +747,6 @@ async function saveKbCounter(conversationId: number, kbCounter: Record<string, n
   });
 }
 
-function log(level: "info"|"warn"|"error", msg: string, data?: any) {
+function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
   console[level](`[${new Date().toISOString()}] ${msg}`, data || "");
 }
