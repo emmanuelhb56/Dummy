@@ -1,4 +1,4 @@
-import { fetchJson } from "@/services/utils/fetchJson";
+import { fetchJsonWithRetry } from "@/services/utils/fetchJson";
 import { getConversationLabels, updateContactFromConversation, getContactIdFromConversation } from "@/services/chatwoot/chatwoot-services";
 import { ContactData, Message } from "@/types/chatwoot";
 
@@ -41,7 +41,7 @@ export async function handlePhoneDetection(
     const contactId = await getContactIdFromConversation(conversationId);
     if (!contactId) return { reply: null, tags };
 
-    const contact = await fetchJson<ContactData>(
+    const contact = await fetchJsonWithRetry<ContactData>(
       `${CHATWOOT_URL}/api/v1/accounts/${ACCOUNT_ID}/contacts/${contactId}`,
       { headers: { api_access_token: PERSONAL_TOKEN } }
     );

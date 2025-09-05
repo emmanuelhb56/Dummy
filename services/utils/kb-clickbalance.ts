@@ -272,10 +272,10 @@ export function shouldUseGPT(userText: string, kb: KBEntry[]): boolean {
   return findKBEntry(userText, kb) === null;
 }
 
-export const CHATWOOT_URL = process.env.CHATWOOT_URL || "https://chat-soporte.clickbalance.net";
-export const ACCOUNT_ID = process.env.ACCOUNT_ID || "1";
-export const PERSONAL_TOKEN = process.env.PERSONAL_TOKEN || "AHJNAzeGUD33Q4ftdfLAFijy";
-export const BOT_TOKEN = process.env.BOT_TOKEN || "tYXRfCAJ7T8M73AcrJoZGmQv";
+export const CHATWOOT_URL = "https://app.chatwoot.com";
+export const ACCOUNT_ID = "132018";
+export const PERSONAL_TOKEN = "F2zAjGZ82fXq9Z1SVVWHDFGa";
+export const BOT_TOKEN = "auBNsnPBgPGZCpKwy2bXpWZz";
 
 export const PERMANENT_TAGS = [
   "soporte_facturacion",
@@ -338,4 +338,18 @@ export const TEMP_TAGS = [
   "solicitar_factura_pago",
   "solicitar_comprobante",
   "solicitar_permisos"
+];
+
+export const SMALL_TALK_TRIGGERS = [
+  "hola",
+  "saludos",
+  "buenas",
+  "buenas noches",
+  "buenas tardes",
+  "buenos días",
+  "buenas madrugadas",
+  "qué tal",
+  "qué pasa",
+  "cómo estás",
+  "cómo va"
 ];
