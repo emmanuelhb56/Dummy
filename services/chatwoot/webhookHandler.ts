@@ -65,11 +65,6 @@ export async function handleWebhook(payload: WebhookPayload) {
         tags: message.tags || []
       };
 
-      // ------------------- 0️⃣ Detectar teléfono ------------------- 
-      const detection = await handlePhoneDetection(conversationId, text, [safeMessage]);
-      if (detection.reply) await sendBotReplySafe(conversationId, detection.reply);
-      if (detection.tags.length) await addTagsSafely(conversationId, detection.tags);
-
       // 0️⃣ Small talk: interceptar antes que todo
       const smallTalkHandled = conversationLabels.includes("small_talk_respondido");
       if (!smallTalkHandled && SMALL_TALK_TRIGGERS.some(trigger => text.includes(trigger))) {

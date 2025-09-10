@@ -28,28 +28,29 @@ export function findKBEntry(text: string, kb: KBEntry[]): KBEntry | null {
 // Menú inicial (widget/multicanal). Puedes ajustar por canal fuera de este archivo.
 export const MENU_MESSAGE = `👋 Hola, soy tu asistente de soporte ClickBalance.
 Puedo ayudarte con:
-1️⃣ Timbrado y facturación
-2️⃣ Activación de timbres
-3️⃣ Punto de venta
-4️⃣ Descarga de XML/PDF
-5️⃣ Acceso y conectividad
-6️⃣ Monedas y tipo de cambio
-7️⃣ Cancelación de facturas
-8️⃣ ADE (Administrador de Documentos Electrónicos)
-9️⃣ Nómina
-🔟 Complementos de pago
-1️⃣1️⃣ Inventario y productos
-1️⃣2️⃣ Certificados digitales (CSD)
-1️⃣3️⃣ Clientes y proveedores
-1️⃣4️⃣ Contabilidad
-1️⃣5️⃣ Membresías y renovaciones
-1️⃣6️⃣ Reportes y exportación
-1️⃣7️⃣ DIOT
-1️⃣8️⃣ Notas de crédito
-1️⃣9️⃣ Cortes de luz y recuperación
-2️⃣0️⃣ Permisos de usuario
+1  Timbrado y facturación
+2  Activación de timbres
+3  Punto de venta
+4  Descarga de XML/PDF
+5  Acceso y conectividad
+6  Monedas y tipo de cambio
+7  Cancelación de facturas
+8  ADE (Administrador de Documentos Electrónicos)
+9  Nómina
+10 Complementos de pago
+11 Inventario y productos
+12 Certificados digitales (CSD)
+13 Clientes y proveedores
+14 Contabilidad
+15 Membresías y renovaciones
+16 Reportes y exportación
+17 DIOT
+18 Notas de crédito
+19 Cortes de luz y recuperación
+20 Permisos de usuario
+21 Otros
 
-👉 Escribe el número de la opción o describe tu problema.`;
+👉 Escribe el número de la opción`;
 
 // KB Base (20 categorías). Respuestas concisas y accionables.
 export const KNOWLEDGE_BASE: KBEntry[] = [
@@ -241,6 +242,14 @@ export const KNOWLEDGE_BASE: KBEntry[] = [
     actions: { addTags: ["kb_permisos"], controlTag: "kb_permisos", maxResponses: 3, priority: "high", assignTeamId: 1 },
     tags: ["permisos"]
   },
+  {
+    id: "otros",
+    categoria: "Otros",
+    triggers: ["otro", "diferente", "no sé", "no entiendo"],
+    response: "¿Podrías explicar mejor el problema que estás experimentando?",
+    actions: { addTags: ["kb_otro"], controlTag: "kb_otro", maxResponses: 1, priority: "high", assignTeamId: 1 },
+    tags: ["otro"]
+  },
 ];
 
 // Helper: mapea números del menú a categorías (opcional)
@@ -265,6 +274,7 @@ export const MENU_MAP: Record<string, string> = {
   "18": "notas_credito",
   "19": "cortes_luz",
   "20": "permisos_usuario",
+  "21": "otros"
 };
 
 // decide si usar GPT según si encontramos match o no
@@ -297,7 +307,8 @@ export const PERMANENT_TAGS = [
   "diot",
   "notas_credito",
   "recuperacion",
-  "permisos"
+  "permisos",
+  "otros"
 ];
 
 export const TEMP_SEMI_PERMANENT_TAGS = [
@@ -320,7 +331,8 @@ export const TEMP_SEMI_PERMANENT_TAGS = [
   "kb_diot",
   "kb_notas_credito",
   "kb_recuperacion",
-  "kb_permisos"
+  "kb_permisos",
+  "kb_otro"
 ];
 
 
