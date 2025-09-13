@@ -32,7 +32,7 @@ export default function RootLayout({
       >
         {children}
       </body>
-            <ChatwootWidget websiteToken={"DXD3T3BkAfR7nCoZDqUHjnEv"} baseUrl={"https://chat-soporte.clickbalance.net"} />
+      <ChatwootWidget websiteToken={"5cyoUG3ZQRuAa882Wmr8puBT"} baseUrl={"https://chatwoot-chatwoot.5hg9qc.easypanel.host"} />
     </html>
   );
 }
