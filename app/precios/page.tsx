@@ -110,6 +110,7 @@ const Schema = z.object({
   empresas: z.number().int().min(1, "Mínimo 1").max(999, "Demasiado alto"),
   addressLine1: z.string().min(5, "Calle y número requeridos"),
   addressLine2: z.string().optional(),
+  betweenStreets: z.string().min(3, "Entre calles requerido"),
   postalCode: z.string().min(5, "CP requerido"),
   country: z.string().min(2, "País requerido"),
   state: z.string().min(2, "Estado requerido"),
@@ -125,6 +126,34 @@ const Schema = z.object({
 });
 type FormValues = z.infer<typeof Schema>;
 type FieldName = keyof FormValues;
+
+type DisplayItem = {
+  title: string;
+  name: string;
+  sku: string;
+  unitAmount: number;
+  quantity: number;
+  lineTotal: number;
+  intervalo?: string;
+};
+
+type DisplaySubscriptionPreview = {
+  seat?: number;
+  id?: string;
+  status?: string;
+  plan_id?: string;
+  billing_cycle_start?: number | null;
+  billing_cycle_end?: number | null;
+  created_at?: number | null;
+  charge_id?: string | null;
+  last_billing_cycle_order_id?: string | null;
+};
+
+type DisplayPayload = {
+  items?: DisplayItem[];
+  summary?: { shipping?: number; discounts?: number; commission?: number };
+  subscriptions?: DisplaySubscriptionPreview[];
+};
 
 type StepKey = "contacto" | "facturacion" | "tarjeta" | "resumen" | "ok";
 const STEPS: { key: StepKey; title: string }[] = [
@@ -144,7 +173,14 @@ export default function PreciosPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [current, setCurrent] = useState<StepKey>("contacto");
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<{ customer_id?: string; subscription_id?: string; display?: unknown; error?: string } | null>(null);
+  const [result, setResult] = useState<{
+    customer_id?: string;
+    subscription_id?: string;
+    subscription_ids?: string[];
+    subscription_details?: DisplaySubscriptionPreview[];
+    display?: DisplayPayload;
+    error?: string;
+  } | null>(null);
   const [toast, setToast] = useState<{ open: boolean; msg: string }>({ open: false, msg: "" });
 
   const { register, setValue, getValues, watch, trigger, reset, formState: { errors } } = useForm<FormValues>({
@@ -152,6 +188,7 @@ export default function PreciosPage() {
     defaultValues: {
       name: "", email: "", phone: "", empresas: 1,
       addressLine1: "", addressLine2: "", postalCode: "", country: "MX", state: "", city: "",
+      betweenStreets: "",
       cardNumber: "", expMonth: "", expYear: "", cvc: "",
       chosenTitle: "", chosenPlanRef: null, chosenIntervalo: "", chosenBase: 0,
     },
@@ -166,6 +203,26 @@ export default function PreciosPage() {
   const chosenBase = watch("chosenBase");
   const chosenAmount = Math.max(1, Number(empresas || 1)) * Number(chosenBase || 0);
 
+  const subscriptionIdsForLink = useMemo(() => {
+    if (!result) return [] as string[];
+    if (Array.isArray(result.subscription_ids) && result.subscription_ids.length) return result.subscription_ids;
+    if (result.subscription_id) {
+      return result.subscription_id
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+    }
+    return [] as string[];
+  }, [result]);
+
+  const facturacionHref = useMemo(() => {
+    if (!result?.customer_id) return "/panel/facturacion";
+    const params = new URLSearchParams();
+    params.set("customer", result.customer_id);
+    if (subscriptionIdsForLink.length) params.set("subs", subscriptionIdsForLink.join(","));
+    return `/panel/facturacion?${params.toString()}`;
+  }, [result?.customer_id, subscriptionIdsForLink]);
+
   function abrirModalParaSuscripcion(s: SubPlan) {
     setValue("chosenTitle", s.nombre);
     setValue("chosenPlanRef", s.referencia);
@@ -179,7 +236,7 @@ export default function PreciosPage() {
 
   const stepFields: Record<Exclude<StepKey, "ok" | "resumen">, FieldName[]> = {
     contacto: ["name", "email", "phone", "empresas"],
-    facturacion: ["addressLine1", "postalCode", "country", "state", "city"],
+    facturacion: ["addressLine1", "addressLine2", "betweenStreets", "postalCode", "country", "state", "city"],
     tarjeta: ["cardNumber", "expMonth", "expYear", "cvc"],
   } as const;
 
@@ -218,6 +275,7 @@ export default function PreciosPage() {
       empresas: 1,
       addressLine1: "",
       addressLine2: "",
+      betweenStreets: "",
       postalCode: "",
       country: "MX",
       state: "",
@@ -299,12 +357,13 @@ export default function PreciosPage() {
           address: {
             line1: v.addressLine1,
             line2: v.addressLine2 || "",
+            betweenStreets: v.betweenStreets || "",
             postalCode: v.postalCode,
             country: v.country,
             state: v.state,
             city: v.city,
           },
-          metadata: { chosenBase: v.chosenBase, chosenAmount, chosenTitle: v.chosenTitle },
+          metadata: { chosenBase: v.chosenBase, chosenAmount, chosenTitle: v.chosenTitle, betweenStreets: v.betweenStreets },
         }),
       });
 
@@ -312,7 +371,8 @@ export default function PreciosPage() {
         customer_id?: string;
         subscription_ids?: string[];
         subscription_id?: string;
-        display?: unknown;
+        subscription_details?: DisplaySubscriptionPreview[];
+        display?: DisplayPayload;
         error?: string;
         message?: string;
       } = await res.json().catch(() => ({}));
@@ -327,6 +387,8 @@ export default function PreciosPage() {
       setResult({
         customer_id: data.customer_id,
         subscription_id: Array.isArray(data.subscription_ids) ? data.subscription_ids.join(", ") : data.subscription_id,
+        subscription_ids: Array.isArray(data.subscription_ids) ? data.subscription_ids : undefined,
+        subscription_details: data.subscription_details,
         display: data.display,
       });
       setCurrent("ok");
@@ -536,6 +598,60 @@ export default function PreciosPage() {
   }
   /* ====== /Listado SIMPLE ====== */
 
+  const formatTimestamp = (value?: number | null) => {
+    if (!value) return "—";
+    try {
+      return new Date(value * 1000).toLocaleString("es-MX", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+    } catch {
+      return "—";
+    }
+  };
+
+  function SubscriptionPreviewList({ subscriptions }: { subscriptions: DisplaySubscriptionPreview[] }) {
+    if (!subscriptions.length) return null;
+    return (
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
+        <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
+          Folios generados
+        </Typography>
+        <Stack spacing={1.5}>
+          {subscriptions.map((sub, idx) => (
+            <Box key={sub.id ?? idx} sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2, p: 1.5 }}>
+              <Typography variant="body2" fontWeight={700}>
+                Folio #{sub.seat ?? idx + 1}: {sub.id ?? "—"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Estado: {sub.status ?? "desconocido"}
+              </Typography>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Plan: {sub.plan_id ?? "—"}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Pedido: {sub.last_billing_cycle_order_id ?? "—"}
+                </Typography>
+              </Stack>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 0.5 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Inicio ciclo: {formatTimestamp(sub.billing_cycle_start)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Fin ciclo: {formatTimestamp(sub.billing_cycle_end)}
+                </Typography>
+              </Stack>
+              <Typography variant="caption" color="text.secondary">
+                Creado: {formatTimestamp(sub.created_at)}
+              </Typography>
+            </Box>
+          ))}
+        </Stack>
+      </Paper>
+    );
+  }
+
   function DialogStepperHeader() {
     return (
       <Box px={3} pt={2} pb={1} borderBottom={1} borderColor="divider" sx={{ position: "sticky", top: 0, zIndex: 2, bgcolor: "background.paper" }}>
@@ -725,7 +841,10 @@ export default function PreciosPage() {
             <>
               <Stack spacing={2}>
                 <RHFText name="addressLine1" label="Calle y número" placeholder="Av. Siempre Viva 742" icon={<Landmark size={16} />} />
-                <RHFText name="addressLine2" label="Colonia / Interior (opcional)" placeholder="Depto 3, Col. Centro" icon={<Building2 size={16} />} />
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                  <RHFText name="addressLine2" label="Colonia / Interior (opcional)" placeholder="Depto 3, Col. Centro" icon={<Building2 size={16} />} />
+                  <RHFText name="betweenStreets" label="Entre calles" placeholder="Ej. Av. Norte y Calle Sur" icon={<MapPin size={16} />} />
+                </Stack>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                   <RHFText name="postalCode" label="Código Postal" placeholder="01234" icon={<Hash size={16} />} />
                   <RHFText name="state" label="Estado" placeholder="CDMX" icon={<MapPin size={16} />} />
@@ -788,7 +907,8 @@ export default function PreciosPage() {
                     <Box>
                       <Typography variant="overline" color="text.secondary">Dirección</Typography>
                       <Typography variant="body2">
-                        {watch("addressLine1")}{watch("addressLine2") ? `, ${watch("addressLine2")}` : ""}, {watch("city")}, {watch("state")}, {watch("postalCode")}, {watch("country")}
+                        {watch("addressLine1")}{watch("addressLine2") ? `, ${watch("addressLine2")}` : ""}
+                        {watch("betweenStreets") ? `, entre ${watch("betweenStreets")}` : ""}, {watch("city")}, {watch("state")}, {watch("postalCode")}, {watch("country")}
                       </Typography>
                     </Box>
                   </Stack>
@@ -832,10 +952,8 @@ export default function PreciosPage() {
                 </Grow>
 
                 {(() => {
-                  const d = result?.display as
-                    | { items?: Array<{ title?: string; name?: string; sku?: string; unitAmount?: number; quantity?: number }> }
-                    | undefined;
-                  const item = d?.items?.[0];
+                  const displayData = result?.display;
+                  const item = displayData?.items?.[0];
                   return (
                     <Slide direction="up" in timeout={700}>
                       <div>
@@ -848,6 +966,12 @@ export default function PreciosPage() {
                       </div>
                     </Slide>
                   );
+                })()}
+
+                {(() => {
+                  const displayData = result?.display;
+                  const subs = displayData?.subscriptions ?? result?.subscription_details ?? [];
+                  return subs.length > 0 ? <SubscriptionPreviewList subscriptions={subs} /> : null;
                 })()}
 
                 {!result?.error && (
@@ -872,7 +996,11 @@ export default function PreciosPage() {
                 <Box display="flex" justifyContent="space-between" alignItems="center">
                   <Button onClick={handleClose} variant="text">Cerrar</Button>
                   <Stack direction="row" spacing={1}>
-                    <Button variant="outlined" component={Link as unknown as React.ElementType} href="/panel/facturacion">
+                    <Button
+                      variant="outlined"
+                      component={Link as unknown as React.ElementType}
+                      href={facturacionHref}
+                    >
                       Ver facturación
                     </Button>
                     <Button variant="contained" component={Link as unknown as React.ElementType} href="/">

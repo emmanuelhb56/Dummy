@@ -34,6 +34,7 @@ type CreateCustomerBody = {
     address: {
       street1: string;
       street2?: string;
+      between_streets?: string;
       postal_code: string;
       country: string;
       state: string;
@@ -71,6 +72,7 @@ type Body = {
   address?: {
     line1: string;
     line2?: string;
+    betweenStreets?: string;
     postalCode: string;
     country: string;
     state: string;
@@ -128,7 +130,13 @@ export async function POST(req: NextRequest) {
       email: body.email,
       phone: phoneNorm,
       payment_sources: [{ type: "card", token_id: body.token_id }],
-      metadata: { empresas: body.empresas ?? 1, planRef: body.planRef, intervalo: body.intervalo, ...(body.metadata ?? {}) },
+      metadata: {
+        empresas: body.empresas ?? 1,
+        planRef: body.planRef,
+        intervalo: body.intervalo,
+        betweenStreets: body.address?.betweenStreets,
+        ...(body.metadata ?? {}),
+      },
       ...(body.address && {
         shipping_contacts: [
           {
@@ -137,6 +145,7 @@ export async function POST(req: NextRequest) {
             address: {
               street1: body.address.line1,
               street2: body.address.line2 ?? "",
+              between_streets: body.address.betweenStreets ?? undefined,
               postal_code: body.address.postalCode,
               country: body.address.country,
               state: body.address.state,
@@ -151,6 +160,7 @@ export async function POST(req: NextRequest) {
     // === 2) Crear N suscripciones del mismo plan, con Idempotency-Key por asiento
     const qty = Math.max(1, Number(body.empresas ?? 1));
     const created: string[] = [];
+    const subscriptionDetails: Array<{ id?: string; status?: string; plan_id?: string; billing_cycle_start?: number | null; billing_cycle_end?: number | null; created_at?: number | null; charge_id?: string | null; last_billing_cycle_order_id?: string | null }> = [];
     const seatErrors: Array<{ seat: number; message: string; detail?: unknown }> = [];
 
     for (let i = 0; i < qty; i++) {
@@ -175,10 +185,21 @@ export async function POST(req: NextRequest) {
             empresas: qty,
             planRef: body.planRef,
             intervalo: body.intervalo,
+            betweenStreets: body.address?.betweenStreets,
             ...(body.metadata ?? {}),
           },
         });
         created.push(subRes.data.id);
+        subscriptionDetails.push({
+          id: subRes.data.id,
+          status: (subRes.data as { status?: string }).status,
+          plan_id: (subRes.data as { plan_id?: string }).plan_id,
+          billing_cycle_start: (subRes.data as { billing_cycle_start?: number | null }).billing_cycle_start,
+          billing_cycle_end: (subRes.data as { billing_cycle_end?: number | null }).billing_cycle_end,
+          created_at: (subRes.data as { created_at?: number | null }).created_at ?? null,
+          charge_id: (subRes.data as { charge_id?: string | null }).charge_id ?? null,
+          last_billing_cycle_order_id: (subRes.data as { last_billing_cycle_order_id?: string | null }).last_billing_cycle_order_id ?? null,
+        });
       } catch (e: unknown) {
         // Si Conekta nos devuelve duplicado por idempotencia,
         // reportamos error de asiento pero NO detenemos el resto.
@@ -210,6 +231,10 @@ export async function POST(req: NextRequest) {
         },
       ],
       summary: { shipping: 0, discounts: 0, commission: 0 },
+      subscriptions: subscriptionDetails.map((sub, index) => ({
+        seat: index + 1,
+        ...sub,
+      })),
     };
 
     // Respuesta
@@ -223,6 +248,7 @@ export async function POST(req: NextRequest) {
           customer_id: customerId,
           count: 0,
           display,
+          subscription_details: subscriptionDetails,
         },
         { status: 409 }
       );
@@ -240,6 +266,7 @@ export async function POST(req: NextRequest) {
           subscription_ids: created,
           count: created.length,
           display,
+          subscription_details: subscriptionDetails,
         },
         { status: 207 } // Multi-Status
       );
@@ -253,6 +280,7 @@ export async function POST(req: NextRequest) {
         subscription_ids: created,
         count: created.length,
         display,
+        subscription_details: subscriptionDetails,
       },
       { status: 200 }
     );
