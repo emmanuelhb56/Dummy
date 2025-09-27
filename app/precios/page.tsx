@@ -203,25 +203,14 @@ export default function PreciosPage() {
   const chosenBase = watch("chosenBase");
   const chosenAmount = Math.max(1, Number(empresas || 1)) * Number(chosenBase || 0);
 
-  const subscriptionIdsForLink = useMemo(() => {
-    if (!result) return [] as string[];
-    if (Array.isArray(result.subscription_ids) && result.subscription_ids.length) return result.subscription_ids;
-    if (result.subscription_id) {
-      return result.subscription_id
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean);
-    }
-    return [] as string[];
-  }, [result]);
-
   const facturacionHref = useMemo(() => {
     if (!result?.customer_id) return "/panel/facturacion";
+
     const params = new URLSearchParams();
     params.set("customer", result.customer_id);
-    if (subscriptionIdsForLink.length) params.set("subs", subscriptionIdsForLink.join(","));
+
     return `/panel/facturacion?${params.toString()}`;
-  }, [result?.customer_id, subscriptionIdsForLink]);
+  }, [result?.customer_id]);
 
   function abrirModalParaSuscripcion(s: SubPlan) {
     setValue("chosenTitle", s.nombre);
@@ -1000,6 +989,7 @@ export default function PreciosPage() {
                       variant="outlined"
                       component={Link as unknown as React.ElementType}
                       href={facturacionHref}
+                      disabled={!result?.customer_id}
                     >
                       Ver facturación
                     </Button>

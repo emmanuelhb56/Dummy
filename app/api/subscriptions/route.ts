@@ -16,6 +16,36 @@ function isValidPhoneMX(raw: string): boolean {
   return digits.length === 10;
 }
 
+function normalizeMetadataValue(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return null;
+    }
+  }
+  return String(value);
+}
+
+function mergeMetadata(
+  ...sources: Array<Record<string, unknown> | undefined>
+): Record<string, string> | undefined {
+  const entries: Array<[string, string]> = [];
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, rawValue] of Object.entries(source)) {
+      const normalized = normalizeMetadataValue(rawValue);
+      if (normalized != null) {
+        entries.push([key, normalized]);
+      }
+    }
+  }
+  if (!entries.length) return undefined;
+  return Object.fromEntries(entries);
+}
+
 /* ===================== Tipos mínimos del SDK ===================== */
 type Headers = Record<string, string>;
 
@@ -31,10 +61,10 @@ type CreateCustomerBody = {
   shipping_contacts?: Array<{
     receiver: string;
     phone: string;
+    between_streets?: string;
     address: {
       street1: string;
       street2?: string;
-      between_streets?: string;
       postal_code: string;
       country: string;
       state: string;
@@ -111,6 +141,8 @@ export async function POST(req: NextRequest) {
       return apiError("Teléfono inválido. Debe tener 10 dígitos MX; se antepone +52", 422, { phone: phoneNorm });
     }
 
+    const qty = Math.max(1, Number(body.empresas ?? 1));
+
     // Config común (sin Idempotency-Key global)
     const baseHeaders: Headers = {
       Accept: "application/vnd.conekta-v2.2.0+json",
@@ -125,27 +157,31 @@ export async function POST(req: NextRequest) {
     });
     const customersApi = new ConektaTyped.CustomersApi(configCustomer);
 
+    const customerMetadata = mergeMetadata(
+      {
+        empresas: qty,
+        planRef: body.planRef,
+        intervalo: body.intervalo,
+        betweenStreets: body.address?.betweenStreets,
+      },
+      body.metadata
+    );
+
     const customerRes = await customersApi.createCustomer({
       name: body.name,
       email: body.email,
       phone: phoneNorm,
       payment_sources: [{ type: "card", token_id: body.token_id }],
-      metadata: {
-        empresas: body.empresas ?? 1,
-        planRef: body.planRef,
-        intervalo: body.intervalo,
-        betweenStreets: body.address?.betweenStreets,
-        ...(body.metadata ?? {}),
-      },
+      ...(customerMetadata && { metadata: customerMetadata }),
       ...(body.address && {
         shipping_contacts: [
           {
             receiver: body.name,
             phone: phoneNorm,
+            between_streets: body.address.betweenStreets ?? undefined,
             address: {
               street1: body.address.line1,
-              street2: body.address.line2 ?? "",
-              between_streets: body.address.betweenStreets ?? undefined,
+              ...(body.address.line2 ? { street2: body.address.line2 } : {}),
               postal_code: body.address.postalCode,
               country: body.address.country,
               state: body.address.state,
@@ -158,7 +194,6 @@ export async function POST(req: NextRequest) {
     const customerId = customerRes.data.id;
 
     // === 2) Crear N suscripciones del mismo plan, con Idempotency-Key por asiento
-    const qty = Math.max(1, Number(body.empresas ?? 1));
     const created: string[] = [];
     const subscriptionDetails: Array<{ id?: string; status?: string; plan_id?: string; billing_cycle_start?: number | null; billing_cycle_end?: number | null; created_at?: number | null; charge_id?: string | null; last_billing_cycle_order_id?: string | null }> = [];
     const seatErrors: Array<{ seat: number; message: string; detail?: unknown }> = [];
@@ -178,16 +213,20 @@ export async function POST(req: NextRequest) {
       const subsApi = new ConektaTyped.SubscriptionsApi(configSub);
 
       try {
-        const subRes = await subsApi.createSubscription(customerId, {
-          plan_id: body.plan_id,
-          metadata: {
+        const subscriptionMetadata = mergeMetadata(
+          {
             seat_index: i + 1,
             empresas: qty,
             planRef: body.planRef,
             intervalo: body.intervalo,
             betweenStreets: body.address?.betweenStreets,
-            ...(body.metadata ?? {}),
           },
+          body.metadata
+        );
+
+        const subRes = await subsApi.createSubscription(customerId, {
+          plan_id: body.plan_id,
+          ...(subscriptionMetadata && { metadata: subscriptionMetadata }),
         });
         created.push(subRes.data.id);
         subscriptionDetails.push({
